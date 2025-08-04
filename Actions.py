@@ -153,7 +153,7 @@ class Actions:
             left = i * card_width
             card_img = card_bar.crop((left, 0, left + card_width, self.CARD_BAR_HEIGHT))
             save_path = os.path.join(self.script_dir, 'screenshots', f"card_{i+1}.png")
-            card_img.save(save_path)
+            # card_img.save(save_path)
             cards.append(save_path)
         
         return cards
@@ -244,6 +244,8 @@ class Actions:
             print(f"Placing card at battlefield position ({x}, {y})")
             if y > 1440:
                 y = 1440
+            if x > 1070:
+                x = 1070
             self._click(x, y)
         else:
             print(f"Invalid card index: {card_index} (must be 0-3)")
