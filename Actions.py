@@ -9,7 +9,7 @@ import time
 import platform
 
 class Actions:
-    def __init__(self):
+    def __init__(self, device_serial=None):
         self.os_type = platform.system()
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
         self.images_folder = os.path.join(self.script_dir, 'main_images')
@@ -17,7 +17,7 @@ class Actions:
         # Initialize ADB connection
         self.adb_client = AdbClient(host="127.0.0.1", port=5037)
         self.device = None
-        self._connect_device()
+        self._connect_device(device_serial)
 
         # BlueStacks default resolution (you may need to adjust based on your setup)
         self.device_width = 1080
@@ -40,18 +40,24 @@ class Actions:
         self.CARD_BAR_WIDTH = 820
         self.CARD_BAR_HEIGHT = 250
 
-    def _connect_device(self):
-        """Connect to the BlueStacks ADB device"""
+    def _connect_device(self, device_serial=None):
+        """Connect to a specific ADB device or the first one available."""
         try:
             devices = self.adb_client.devices()
             if not devices:
-                print("No ADB devices found. Make sure BlueStacks is running and ADB is enabled.")
+                print("No ADB devices found. Make sure emulators are running and ADB is enabled.")
                 print("Run setup_adb.py first to configure ADB connection.")
                 return False
             
-            # Usually BlueStacks appears as the first device, but you might need to select the right one
-            self.device = devices[0]
-            print(f"Connected to device: {self.device}")
+            if device_serial:
+                self.device = self.adb_client.device(device_serial)
+                if not self.device:
+                    print(f"Device with serial {device_serial} not found.")
+                    return False
+            else:
+                self.device = devices[0]
+            
+            print(f"Connected to device: {self.device.serial}")
             return True
         except Exception as e:
             print(f"Failed to connect to ADB device: {e}")
