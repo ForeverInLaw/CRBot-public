@@ -20,5 +20,6 @@
   "cannon": { "elixir": 3 },
   "battle ram": { "elixir": 4 },
   "mega minion": { "elixir": 3 },
-  "mini pekka": { "elixir": 4 }
+  "mini pekka": { "elixir": 4 },
+  "giant": { "elixir": 5 }
 }
