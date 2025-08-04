@@ -1,7 +1,9 @@
 import numpy as np
 import time
 import os
+import json
 import threading
+from functools import wraps
 from dotenv import load_dotenv
 from Actions import Actions
 from inference_sdk import InferenceHTTPClient
@@ -11,16 +13,35 @@ load_dotenv()
 
 MAX_ENEMIES = 10
 MAX_ALLIES = 10
+NUM_CARD_SLOTS = 4
 
 SPELL_CARDS = ["Fireball", "Zap", "Arrows", "Tornado", "Rocket", "Lightning", "Freeze"]
+
+
+from functools import wraps
+
+# Performance decorator
+def timing_decorator(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        end_time = time.time()
+        print(f"[Performance] {func.__name__:<25} took {end_time - start_time:.4f} seconds")
+        return result
+    return wrapper
 
 class ClashRoyaleEnv:
     def __init__(self):
         self.actions = Actions()
         self.rf_model = self.setup_roboflow()
         self.card_model = self.setup_card_roboflow()
-        self.state_size = 1 + 2 * (MAX_ALLIES + MAX_ENEMIES)
+        
+        self._load_card_data()
 
+        # state_size = 1 (elixir) + 4*2 (card_id, elixir_cost) + 10*2 (allies) + 10*2 (enemies)
+        self.state_size = 1 + (NUM_CARD_SLOTS * 2) + (2 * MAX_ALLIES) + (2 * MAX_ENEMIES)
+        
         self.num_cards = 4
         self.grid_width = 18
         self.grid_height = 28
@@ -40,6 +61,14 @@ class ClashRoyaleEnv:
         self.prev_enemy_princess_towers = None
 
         self.match_over_detected = False
+
+    def _load_card_data(self):
+        card_data_path = os.path.join(os.path.dirname(__file__), 'cards.json')
+        with open(card_data_path, 'r') as f:
+            self.card_data = json.load(f)
+        
+        self.card_to_id = {name: i for i, name in enumerate(self.card_data.keys())}
+        self.id_to_card = {i: name for name, i in self.card_to_id.items()}
 
     def setup_roboflow(self):
         api_key = os.getenv('ROBOFLOW_API_KEY')
@@ -62,7 +91,8 @@ class ClashRoyaleEnv:
         )
 
     def reset(self):
-        self.actions.click_battle_start()
+        # self.actions.click_battle_start()
+        # Instead, just wait for the new game to load after clicking "Play Again"
         time.sleep(3)
         self.game_over_flag = None
         self._endgame_thread_stop.clear()
@@ -79,6 +109,7 @@ class ClashRoyaleEnv:
         if self._endgame_thread:
             self._endgame_thread.join()
 
+    @timing_decorator
     def step(self, action_index):
         # If match over, only allow no-op action (last action in list)
         if self.match_over_detected:
@@ -151,19 +182,25 @@ class ClashRoyaleEnv:
         next_state = self._get_state()
         return next_state, reward, done
 
+    @timing_decorator
     def _get_state(self):
-        self.actions.capture_area(self.screenshot_path)
         elixir = self.actions.count_elixir()
-        
+
+        # Get card info
+        self.current_cards = self.detect_cards_in_hand()
+        card_info_flat = []
+        for card_name in self.current_cards:
+            card_id = self.card_to_id.get(card_name, self.card_to_id["Unknown"])
+            elixir_cost = self.card_data.get(card_name, {}).get("elixir", 5)
+            if "elixir" not in self.card_data.get(card_name, {}):
+                print(f"\033[93mWARNING: Card '{card_name}' detected but has no elixir linked to it, defaulting to 5.\033[0m")
+            card_info_flat.extend([card_id / len(self.card_to_id), elixir_cost / 10.0])
+
         workspace_name = os.getenv('WORKSPACE_TROOP_DETECTION')
         if not workspace_name:
             raise ValueError("WORKSPACE_TROOP_DETECTION environment variable is not set. Please check your .env file.")
         
-        results = self.rf_model.run_workflow(
-            workspace_name=workspace_name,
-            workflow_id="detect-count-and-visualize",
-            images={"image": self.screenshot_path}
-        )
+        results = self.run_detection_workflow(workspace_name)
 
         # print("RAW results:", results)
 
@@ -241,9 +278,20 @@ class ClashRoyaleEnv:
         ally_flat = [coord for pos in ally_positions for coord in pos]
         enemy_flat = [coord for pos in enemy_positions for coord in pos]
 
-        state = np.array([elixir / 10.0] + ally_flat + enemy_flat, dtype=np.float32)
+        state = np.array([elixir / 10.0] + card_info_flat + ally_flat + enemy_flat, dtype=np.float32)
         return state
 
+    @timing_decorator
+    def run_detection_workflow(self, workspace_name):
+        results = self.rf_model.run_workflow(
+            workspace_name=workspace_name,
+            workflow_id="detect-count-and-visualize",
+            images={"image": self.screenshot_path}
+        )
+        
+        return results
+
+    @timing_decorator
     def _compute_reward(self, state):
         if state is None:
             return 0
@@ -268,6 +316,7 @@ class ClashRoyaleEnv:
 
         return reward
 
+    @timing_decorator
     def detect_cards_in_hand(self):
         try:
             card_paths = self.actions.capture_individual_cards()
@@ -279,11 +328,7 @@ class ClashRoyaleEnv:
                 raise ValueError("WORKSPACE_CARD_DETECTION environment variable is not set. Please check your .env file.")
             
             for card_path in card_paths:
-                results = self.card_model.run_workflow(
-                    workspace_name=workspace_name,
-                    workflow_id="custom-workflow",
-                    images={"image": card_path}
-                )
+                results = self.run_card_detection_workflow(workspace_name, card_path)
                 # print("Card detection raw results:", results)  # Debug print
 
                 # Fix: parse nested structure
@@ -303,6 +348,16 @@ class ClashRoyaleEnv:
         except Exception as e:
             print(f"Error in detect_cards_in_hand: {e}")
             return []
+        
+    @timing_decorator
+    def run_card_detection_workflow(self, workspace_name, card_path):
+        results = self.card_model.run_workflow(
+                    workspace_name=workspace_name,
+                    workflow_id="custom-workflow",
+                    images={"image": card_path}
+                )
+        
+        return results
 
     def get_available_actions(self):
         """Generate all possible actions"""

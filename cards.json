@@ -1,0 +1,23 @@
+{
+  "unknown": { "elixir": 0 },
+  "musketeer": { "elixir": 4 },
+  "arrows": { "elixir": 3 },
+  "archers": { "elixir": 2 },
+  "knight": { "elixir": 2 },
+  "pekka": { "elixir": 3 },
+  "prince": { "elixir": 3 },
+  "minions": { "elixir": 3 },
+  "fireball": { "elixir": 4 },
+  "goblins": { "elixir": 2 },
+  "spirit goblins": { "elixir": 2 },
+  "goblin hut": { "elixir": 4 },
+  "goblin cage": { "elixir": 4 },
+  "skeletons": { "elixir": 1 },
+  "bomber": { "elixir": 2 },
+  "valkyrie": { "elixir": 4 },
+  "tombstone": { "elixir": 3 },
+  "barbarians": { "elixir": 5 },
+  "cannon": { "elixir": 3 },
+  "battle ram": { "elixir": 4 },
+  "mega minion": { "elixir": 3 }
+}
