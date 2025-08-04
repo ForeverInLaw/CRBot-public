@@ -1,5 +1,5 @@
 {
-  "unknown": { "elixir": 0 },
+  "unknown": { "elixir": 5 },
   "musketeer": { "elixir": 4 },
   "arrows": { "elixir": 3 },
   "archers": { "elixir": 2 },
@@ -19,5 +19,6 @@
   "barbarians": { "elixir": 5 },
   "cannon": { "elixir": 3 },
   "battle ram": { "elixir": 4 },
-  "mega minion": { "elixir": 3 }
+  "mega minion": { "elixir": 3 },
+  "mini pekka": { "elixir": 4 }
 }

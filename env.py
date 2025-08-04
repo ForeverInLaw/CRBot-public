@@ -32,8 +32,8 @@ def timing_decorator(func):
     return wrapper
 
 class ClashRoyaleEnv:
-    def __init__(self):
-        self.actions = Actions()
+    def __init__(self, device_serial=None):
+        self.actions = Actions(device_serial=device_serial)
         self.rf_model = self.setup_roboflow()
         self.card_model = self.setup_card_roboflow()
         
@@ -91,7 +91,7 @@ class ClashRoyaleEnv:
         )
 
     def reset(self):
-        # self.actions.click_battle_start()
+        self.actions.click_battle_start()
         # Instead, just wait for the new game to load after clicking "Play Again"
         time.sleep(3)
         self.game_over_flag = None
@@ -126,7 +126,7 @@ class ClashRoyaleEnv:
                 reward -= 100
                 print("Defeat detected - ending episode")
             self.match_over_detected = False  # Reset for next episode
-            return self._get_state(), reward, done
+            return self._get_state(), reward, done, result
 
         self.current_cards = self.detect_cards_in_hand()
         print("\nCurrent cards in hand:", self.current_cards)
@@ -137,7 +137,7 @@ class ClashRoyaleEnv:
             self.actions._click(640, 400)  # Click at center of screen in device coordinates
             # Return current state, zero reward, not done
             next_state = self._get_state()
-            return next_state, 0, False
+            return next_state, 0, False, None
 
         action = self.available_actions[action_index]
         card_index, x_frac, y_frac = action
@@ -180,7 +180,7 @@ class ClashRoyaleEnv:
         done = False
         reward = self._compute_reward(self._get_state()) + spell_penalty + princess_tower_reward
         next_state = self._get_state()
-        return next_state, reward, done
+        return next_state, reward, done, None
 
     @timing_decorator
     def _get_state(self):
@@ -190,7 +190,7 @@ class ClashRoyaleEnv:
         self.current_cards = self.detect_cards_in_hand()
         card_info_flat = []
         for card_name in self.current_cards:
-            card_id = self.card_to_id.get(card_name, self.card_to_id["Unknown"])
+            card_id = self.card_to_id.get(card_name, self.card_to_id["unknown"])
             elixir_cost = self.card_data.get(card_name, {}).get("elixir", 5)
             if "elixir" not in self.card_data.get(card_name, {}):
                 print(f"\033[93mWARNING: Card '{card_name}' detected but has no elixir linked to it, defaulting to 5.\033[0m")

@@ -2,6 +2,7 @@ import os
 import torch
 import glob
 import json
+import csv
 from env import ClashRoyaleEnv
 from dqn_agent import DQNAgent
 from pynput import keyboard
@@ -38,6 +39,13 @@ def train():
     # Ensure models directory exists
     os.makedirs("models", exist_ok=True)
 
+    # Setup logging
+    log_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = f"training_log_{log_timestamp}.csv"
+    with open(log_file, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(["Episode", "Total Reward", "Result", "Epsilon"])
+
     # Load latest model if available
     latest_model = get_latest_model_path("models")
     if latest_model:
@@ -63,14 +71,23 @@ def train():
         print(f"Episode {ep + 1} starting. Epsilon: {agent.epsilon:.3f}")  # <-- Add this line
         total_reward = 0
         done = False
+        game_result = None
         while not done:
             action = agent.act(state)
-            next_state, reward, done = env.step(action)
+            next_state, reward, done, result = env.step(action)
+            if result:
+                game_result = result
             agent.remember(state, action, reward, next_state, done)
             agent.replay(batch_size)
             state = next_state
             total_reward += reward
-        print(f"Episode {ep + 1}: Total Reward = {total_reward:.2f}, Epsilon = {agent.epsilon:.3f}")
+        
+        # Log episode results
+        with open(log_file, 'a', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([ep + 1, total_reward, game_result, agent.epsilon])
+
+        print(f"Episode {ep + 1}: Total Reward = {total_reward:.2f}, Result = {game_result}, Epsilon = {agent.epsilon:.3f}")
 
         if ep % 10 == 0:
             agent.update_target_model()
