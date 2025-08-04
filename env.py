@@ -27,9 +27,20 @@ def timing_decorator(func):
         start_time = time.time()
         result = func(*args, **kwargs)
         end_time = time.time()
-        print(f"[Performance] {func.__name__:<25} took {end_time - start_time:.4f} seconds")
+        # print(f"[Performance] {func.__name__:<25} took {end_time - start_time:.4f} seconds")
         return result
     return wrapper
+
+class bcolors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKCYAN = '\033[96m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
 
 class ClashRoyaleEnv:
     def __init__(self, device_serial=None):
@@ -121,15 +132,15 @@ class ClashRoyaleEnv:
             result = self.game_over_flag
             if result == "victory":
                 reward += 100
-                print("Victory detected - ending episode")
+                print(f"{bcolors.OKGREEN}Victory detected - ending episode{bcolors.ENDC}")
             elif result == "defeat":
                 reward -= 100
-                print("Defeat detected - ending episode")
+                print(f"{bcolors.FAIL}Defeat detected - ending episode{bcolors.ENDC}")
             self.match_over_detected = False  # Reset for next episode
             return self._get_state(), reward, done, result
 
         self.current_cards = self.detect_cards_in_hand()
-        print("\nCurrent cards in hand:", self.current_cards)
+        print(f"\n{bcolors.OKCYAN}Current cards in hand:{bcolors.ENDC}", self.current_cards)
 
         # If all cards are "Unknown", click at center and return no-op
         if all(card == "Unknown" for card in self.current_cards):
@@ -141,13 +152,13 @@ class ClashRoyaleEnv:
 
         action = self.available_actions[action_index]
         card_index, x_frac, y_frac = action
-        print(f"Action selected: card_index={card_index}, x_frac={x_frac:.2f}, y_frac={y_frac:.2f}")
+        print(f"{bcolors.BOLD}Action selected: card_index={card_index}, x_frac={x_frac:.2f}, y_frac={y_frac:.2f}{bcolors.ENDC}")
 
         spell_penalty = 0
 
         if card_index != -1 and card_index < len(self.current_cards):
             card_name = self.current_cards[card_index]
-            print(f"Attempting to play {card_name}")
+            print(f"{bcolors.OKBLUE}Attempting to play {card_name}{bcolors.ENDC}")
             x = int(x_frac * self.actions.WIDTH)
             y = int(y_frac * self.actions.HEIGHT)
             self.actions.card_play(x, y, card_index)
