@@ -51,7 +51,7 @@ class ClashRoyaleEnv:
         self.grid_width = 18
         self.grid_height = 28
 
-        self.screenshot_path = os.path.join(os.path.dirname(__file__), 'screenshots', "current.png")
+        self.screenshot_path = os.path.join(os.path.dirname(__file__), 'screenshots', f"{self.device_serial}_current.png")
         self.available_actions = self.get_available_actions()
         self.action_size = len(self.available_actions)
         self.current_cards = []
@@ -105,6 +105,7 @@ class ClashRoyaleEnv:
         self._endgame_thread.start()
         self.prev_elixir = None
         self.prev_enemy_presence = None
+        self.actions.last_screenshot = None
         self.prev_enemy_princess_towers = self._count_enemy_princess_towers()
         self.match_over_detected = False
         return self._get_state()
@@ -401,7 +402,7 @@ class ClashRoyaleEnv:
 
     def _count_enemy_princess_towers(self):
         # Considering count enemy princess is called only from step function and step function already has a **fresh** screenshot, we can skip taking a new screenshot here
-        self.actions.capture_area(self.screenshot_path, screenshot=self.actions.last_screenshot)
+        self.actions.capture_area(self.screenshot_path, self.actions.last_screenshot)
         
         workspace_name = os.getenv('WORKSPACE_TROOP_DETECTION')
         if not workspace_name:

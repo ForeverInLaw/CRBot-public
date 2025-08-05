@@ -183,8 +183,8 @@ class Actions:
 
     def count_elixir(self, screenshot=None):
         """Count elixir using ADB screenshot analysis"""
-        if screenshot is None:
-            screenshot = self._take_screenshot()
+        screenshot = self._take_screenshot()
+            
         if not screenshot:
             self.logger.error("Failed to capture screenshot for elixir counting")
             return 0

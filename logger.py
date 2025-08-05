@@ -27,7 +27,7 @@ class Logger:
         "ERROR": 4
     }
     
-    def __init__(self, name="CRBot", device_serial=None, log_level="DEBUG", log_to_file=False, log_dir="logs"):
+    def __init__(self, name="CRBot", device_serial=None, log_level="DEBUG", log_to_file=False, log_dir="models/logs"):
         """
         Initialize a new Logger instance.
         
