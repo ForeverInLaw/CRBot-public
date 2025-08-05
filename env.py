@@ -7,6 +7,7 @@ from functools import wraps
 from dotenv import load_dotenv
 from Actions import Actions
 from inference_sdk import InferenceHTTPClient
+from logger import Logger
 
 # Load environment variables from .env file
 load_dotenv()
@@ -27,23 +28,16 @@ def timing_decorator(func):
         start_time = time.time()
         result = func(*args, **kwargs)
         end_time = time.time()
-        # print(f"[Performance] {func.__name__:<25} took {end_time - start_time:.4f} seconds")
+        print(f"[Performance] {func.__name__:<25} took {end_time - start_time:.4f} seconds")
         return result
     return wrapper
 
-class bcolors:
-    HEADER = '\033[95m'
-    OKBLUE = '\033[94m'
-    OKCYAN = '\033[96m'
-    OKGREEN = '\033[92m'
-    WARNING = '\033[93m'
-    FAIL = '\033[91m'
-    ENDC = '\033[0m'
-    BOLD = '\033[1m'
-    UNDERLINE = '\033[4m'
-
 class ClashRoyaleEnv:
     def __init__(self, device_serial=None):
+        # Initialize logger with device serial
+        self.logger = Logger(name="ClashRoyaleEnv", device_serial=device_serial, log_level="DEBUG")
+        self.device_serial = device_serial
+        
         self.actions = Actions(device_serial=device_serial)
         self.rf_model = self.setup_roboflow()
         self.card_model = self.setup_card_roboflow()
@@ -128,23 +122,24 @@ class ClashRoyaleEnv:
 
         if self.game_over_flag:
             done = True
-            reward = self._compute_reward(self._get_state())
+            state = self._get_state()
+            reward = self._compute_reward(state)
             result = self.game_over_flag
             if result == "victory":
                 reward += 100
-                print(f"{bcolors.OKGREEN}Victory detected - ending episode{bcolors.ENDC}")
+                self.logger.success("Victory detected - ending episode")
             elif result == "defeat":
                 reward -= 100
-                print(f"{bcolors.FAIL}Defeat detected - ending episode{bcolors.ENDC}")
+                self.logger.error("Defeat detected - ending episode")
             self.match_over_detected = False  # Reset for next episode
-            return self._get_state(), reward, done, result
+            return state, reward, done, result
 
         self.current_cards = self.detect_cards_in_hand()
-        print(f"\n{bcolors.OKCYAN}Current cards in hand:{bcolors.ENDC}", self.current_cards)
+        self.logger.info(f"Current cards in hand: {self.current_cards}")
 
         # If all cards are "Unknown", click at center and return no-op
         if all(card == "Unknown" for card in self.current_cards):
-            print("All cards are Unknown, clicking at center and skipping move.")
+            self.logger.warning("All cards are Unknown, clicking at center and skipping move.")
             self.actions._click(640, 400)  # Click at center of screen in device coordinates
             # Return current state, zero reward, not done
             next_state = self._get_state()
@@ -152,13 +147,14 @@ class ClashRoyaleEnv:
 
         action = self.available_actions[action_index]
         card_index, x_frac, y_frac = action
-        print(f"{bcolors.BOLD}Action selected: card_index={card_index}, x_frac={x_frac:.2f}, y_frac={y_frac:.2f}{bcolors.ENDC}")
+        self.logger.info(f"Action selected: card_index={card_index}, x_frac={x_frac:.2f}, y_frac={y_frac:.2f}")
 
         spell_penalty = 0
+        state = self._get_state()
 
         if card_index != -1 and card_index < len(self.current_cards):
             card_name = self.current_cards[card_index]
-            print(f"{bcolors.OKBLUE}Attempting to play {card_name}{bcolors.ENDC}")
+            self.logger.info(f"Attempting to play {card_name}")
             x = int(x_frac * self.actions.WIDTH)
             y = int(y_frac * self.actions.HEIGHT)
             self.actions.card_play(x, y, card_index)
@@ -166,7 +162,6 @@ class ClashRoyaleEnv:
 
             # --- Spell penalty logic ---
             if card_name in SPELL_CARDS:
-                state = self._get_state()
                 enemy_positions = []
                 for i in range(1 + 2 * MAX_ALLIES, 1 + 2 * MAX_ALLIES + 2 * MAX_ENEMIES, 2):
                     ex = state[i]
@@ -189,22 +184,26 @@ class ClashRoyaleEnv:
         self.prev_enemy_princess_towers = current_enemy_princess_towers
 
         done = False
-        reward = self._compute_reward(self._get_state()) + spell_penalty + princess_tower_reward
-        next_state = self._get_state()
+        
+        # Avoid recomputing state in order to save computation time
+        reward = self._compute_reward(state) + spell_penalty + princess_tower_reward
+        next_state = state
         return next_state, reward, done, None
 
     @timing_decorator
     def _get_state(self):
-        elixir = self.actions.count_elixir()
-
         # Get card info
         self.current_cards = self.detect_cards_in_hand()
+        
+        # Caching mechanism for screenshot, to speed up processing
+        elixir = self.actions.count_elixir(self.actions.last_screenshot)
+
         card_info_flat = []
         for card_name in self.current_cards:
             card_id = self.card_to_id.get(card_name, self.card_to_id["unknown"])
             elixir_cost = self.card_data.get(card_name, {}).get("elixir", 5)
             if "elixir" not in self.card_data.get(card_name, {}):
-                print(f"\033[93mWARNING: Card '{card_name}' detected but has no elixir linked to it, defaulting to 5.\033[0m")
+                self.logger.warning(f"Card '{card_name}' detected but has no elixir linked to it, defaulting to 5.")
             card_info_flat.extend([card_id / len(self.card_to_id), elixir_cost / 10.0])
 
         workspace_name = os.getenv('WORKSPACE_TROOP_DETECTION')
@@ -225,7 +224,7 @@ class ClashRoyaleEnv:
                 predictions = first["predictions"]
 
         if not predictions:
-            print("WARNING: No predictions found in results")
+            self.logger.warning("No predictions found in results")
             return None
 
         # After getting 'predictions' from results:
@@ -233,8 +232,8 @@ class ClashRoyaleEnv:
             predictions = predictions["predictions"]
 
         for p in predictions:
-            print(f"{p['class']} at ({p['x']}, {p['y']}) with confidence {p['confidence']:.2f}")
-        print("Detected classes:", [repr(p.get("class", "")) for p in predictions if isinstance(p, dict)])
+            self.logger.debug(f"{p['class']} at ({p['x']}, {p['y']}) with confidence {p['confidence']:.2f}")
+        self.logger.debug(f"Detected classes: {[repr(p.get('class', '')) for p in predictions if isinstance(p, dict)]}")
 
         TOWER_CLASSES = {
             "ally king tower",
@@ -267,9 +266,10 @@ class ClashRoyaleEnv:
                 and "x" in p and "y" in p
             )
         ]
-
-        print("Allies:", allies)
-        print("Enemies:", enemies)
+        
+        
+        self.logger.debug(f"Allies: {allies}")
+        self.logger.debug(f"Enemies: {enemies}")
 
         # Normalize positions
         def normalize(units):
@@ -331,7 +331,7 @@ class ClashRoyaleEnv:
     def detect_cards_in_hand(self):
         try:
             card_paths = self.actions.capture_individual_cards()
-            print("\nTesting individual card predictions:")
+            self.logger.debug("Testing individual card predictions:")
 
             cards = []
             workspace_name = os.getenv('WORKSPACE_CARD_DETECTION')
@@ -350,14 +350,14 @@ class ClashRoyaleEnv:
                         predictions = preds_dict.get("predictions", [])
                 if predictions:
                     card_name = predictions[0]["class"]
-                    print(f"Detected card: {card_name}")
+                    self.logger.debug(f"Detected card: {card_name}")
                     cards.append(card_name)
                 else:
-                    print("No card detected.")
+                    self.logger.debug("No card detected.")
                     cards.append("Unknown")
             return cards
         except Exception as e:
-            print(f"Error in detect_cards_in_hand: {e}")
+            self.logger.error(f"Error in detect_cards_in_hand: {e}")
             return []
         
     @timing_decorator
@@ -387,7 +387,7 @@ class ClashRoyaleEnv:
             # Check for match over first (during game)
             if not self.match_over_detected and hasattr(self.actions, "detect_match_over"):
                 if self.actions.detect_match_over():
-                    print("Match over detected (matchover.png), forcing no-op until next game.")
+                    self.logger.warning("Match over detected (matchover.png), forcing no-op until next game.")
                     self.match_over_detected = True
             
             # Check for game end (victory/defeat screen)
@@ -400,7 +400,8 @@ class ClashRoyaleEnv:
             time.sleep(0.5)
 
     def _count_enemy_princess_towers(self):
-        self.actions.capture_area(self.screenshot_path)
+        # Considering count enemy princess is called only from step function and step function already has a **fresh** screenshot, we can skip taking a new screenshot here
+        self.actions.capture_area(self.screenshot_path, screenshot=self.actions.last_screenshot)
         
         workspace_name = os.getenv('WORKSPACE_TROOP_DETECTION')
         if not workspace_name:

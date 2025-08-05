@@ -1,5 +1,5 @@
 import os
-from src.env import ClashRoyaleEnv
+from env import ClashRoyaleEnv
 import time
 
 def test_card_detection():
@@ -29,13 +29,13 @@ def test_card_detection():
     #     print(f"Card {card} is in position {position} (Key: {env.actions.card_keys[position]})")
     
     # Test 4: Try to play each card
-    print("\nTesting card placement...")
-    for card in env.current_cards:
-        print(f"\nTrying to play card: {card}")
-        x = env.actions.WIDTH // 2
-        y = env.actions.HEIGHT * 3 // 4
-        env.actions.card_play(x, y, env.current_cards.index(card))
-        time.sleep(2)  # Wait between card plays
+    # print("\nTesting card placement...")
+    # for card in env.current_cards:
+    #     print(f"\nTrying to play card: {card}")
+    #     x = env.actions.WIDTH // 2
+    #     y = env.actions.HEIGHT * 3 // 4
+    #     env.actions.card_play(x, y, env.current_cards.index(card))
+    #     time.sleep(2)  # Wait between card plays
 
 if __name__ == "__main__":
     test_card_detection()

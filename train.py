@@ -7,6 +7,8 @@ from env import ClashRoyaleEnv
 from dqn_agent import DQNAgent
 from pynput import keyboard
 from datetime import datetime
+import csv
+from colors import bcolors
 
 class KeyboardController:
     def __init__(self):
@@ -17,7 +19,7 @@ class KeyboardController:
     def on_press(self, key):
         try:
             if key.char == 'q':
-                print("\nShutdown requested - cleaning up...")
+                print(f"\n{bcolors.WARNING}Shutdown requested - cleaning up...{bcolors.ENDC}")
                 self.should_exit = True
         except AttributeError:
             pass  # Special key pressed
@@ -33,18 +35,21 @@ def get_latest_model_path(models_dir="models"):
     return model_files[-1]
 
 def train():
+    # Create a unique timestamp for this training session
+    session_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Ensure models directory exists
+    log_dir = os.path.join("models", "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    log_file_path = os.path.join(log_dir, f"log_{session_timestamp}.csv")
+    
+    # Write header to log file
+    with open(log_file_path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(["Episode", "Total Reward", "Epsilon", "Result"])
+
     env = ClashRoyaleEnv()
     agent = DQNAgent(env.state_size, env.action_size)
-
-    # Ensure models directory exists
-    os.makedirs("models", exist_ok=True)
-
-    # Setup logging
-    log_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = f"training_log_{log_timestamp}.csv"
-    with open(log_file, 'w', newline='') as f:
-        writer = csv.writer(f)
-        writer.writerow(["Episode", "Total Reward", "Result", "Epsilon"])
 
     # Load latest model if available
     latest_model = get_latest_model_path("models")
@@ -64,40 +69,36 @@ def train():
 
     for ep in range(episodes):
         if controller.is_exit_requested():
-            print("Training interrupted by user.")
+            print(f"{bcolors.WARNING}Training interrupted by user.{bcolors.ENDC}")
             break
 
         state = env.reset()
-        print(f"Episode {ep + 1} starting. Epsilon: {agent.epsilon:.3f}")  # <-- Add this line
+        print(f"{bcolors.OKCYAN}Episode {ep + 1} starting. Epsilon: {agent.epsilon:.3f}{bcolors.ENDC}")
         total_reward = 0
         done = False
-        game_result = None
         while not done:
             action = agent.act(state)
             next_state, reward, done, result = env.step(action)
-            if result:
-                game_result = result
             agent.remember(state, action, reward, next_state, done)
             agent.replay(batch_size)
             state = next_state
             total_reward += reward
-        
-        # Log episode results
-        with open(log_file, 'a', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow([ep + 1, total_reward, game_result, agent.epsilon])
 
-        print(f"Episode {ep + 1}: Total Reward = {total_reward:.2f}, Result = {game_result}, Epsilon = {agent.epsilon:.3f}")
+        print(f"{bcolors.OKGREEN}Episode {ep + 1}: Total Reward = {total_reward:.2f}, Epsilon = {agent.epsilon:.3f}, Result = {result}{bcolors.ENDC}")
+
+        # Log episode data
+        with open(log_file_path, 'a', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([ep + 1, total_reward, agent.epsilon, result])
 
         if ep % 10 == 0:
             agent.update_target_model()
             # Save model and epsilon every 10 episodes
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            model_path = os.path.join("models", f"model_{timestamp}.pth")
+            model_path = os.path.join("models", f"model_{session_timestamp}.pth")
             torch.save(agent.model.state_dict(), model_path)
-            with open(os.path.join("models", f"meta_{timestamp}.json"), "w") as f:
+            with open(os.path.join("models", f"meta_{session_timestamp}.json"), "w") as f:
                 json.dump({"epsilon": agent.epsilon}, f)
-            print(f"Model and epsilon saved to {model_path}")
+            print(f"{bcolors.OKGREEN}Model and epsilon saved for session {session_timestamp}{bcolors.ENDC}")
 
 if __name__ == "__main__":
     train()

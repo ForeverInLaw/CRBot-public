@@ -7,9 +7,26 @@ import os
 from datetime import datetime
 import time
 import platform
+from functools import wraps
+from logger import Logger
+
+# Performance decorator
+def timing_decorator(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        end_time = time.time()
+        print(f"[Performance] {func.__name__:<25} took {end_time - start_time:.4f} seconds")
+        return result
+    return wrapper
 
 class Actions:
     def __init__(self, device_serial=None):
+        # Initialize logger with device serial
+        self.logger = Logger(name="Actions", device_serial=device_serial, log_level="DEBUG")
+        self.device_serial = device_serial
+        
         self.os_type = platform.system()
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
         self.images_folder = os.path.join(self.script_dir, 'main_images')
@@ -39,80 +56,85 @@ class Actions:
         self.CARD_BAR_Y = 1590
         self.CARD_BAR_WIDTH = 820
         self.CARD_BAR_HEIGHT = 250
+        
+        self.last_screenshot = None
 
     def _connect_device(self, device_serial=None):
         """Connect to a specific ADB device or the first one available."""
         try:
             devices = self.adb_client.devices()
             if not devices:
-                print("No ADB devices found. Make sure emulators are running and ADB is enabled.")
-                print("Run setup_adb.py first to configure ADB connection.")
+                self.logger.error("No ADB devices found. Make sure emulators are running and ADB is enabled.")
+                self.logger.warning("Run setup_adb.py first to configure ADB connection.")
                 return False
-            
+                
             if device_serial:
                 self.device = self.adb_client.device(device_serial)
                 if not self.device:
-                    print(f"Device with serial {device_serial} not found.")
+                    self.logger.error(f"Device with serial {device_serial} not found.")
                     return False
             else:
                 self.device = devices[0]
             
-            print(f"Connected to device: {self.device.serial}")
+            self.logger.success(f"Connected to device: {self.device.serial}")
             return True
         except Exception as e:
-            print(f"Failed to connect to ADB device: {e}")
-            print("Run setup_adb.py first to configure ADB connection.")
+            self.logger.error(f"Failed to connect to ADB device: {e}")
+            self.logger.warning("Run setup_adb.py first to configure ADB connection.")
             return False
 
+    @timing_decorator
     def _take_screenshot(self):
         """Take a screenshot using ADB"""
         if not self.device:
-            print("No device connected")
+            self.logger.error("No device connected")
             return None
         
         try:
             screenshot_data = self.device.screencap()
             screenshot = Image.open(io.BytesIO(screenshot_data))
+            self.last_screenshot = screenshot
             return screenshot
         except Exception as e:
-            print(f"Failed to take screenshot: {e}")
+            self.logger.error(f"Failed to take screenshot: {e}")
             return None
 
     def _click(self, x, y):
         """Click at coordinates using ADB"""
         if not self.device:
-            print("No device connected")
+            self.logger.error("No device connected")
             return False
         
         try:
-            self.device.shell(f"input touchscreen swipe {x} {y} {x} {y} 500")
+            self.device.shell(f"input touchscreen swipe {x} {y} {x} {y} 300")
             return True
         except Exception as e:
-            print(f"Failed to click at ({x}, {y}): {e}")
+            self.logger.error(f"Failed to click at ({x}, {y}): {e}")
             return False
 
     def _swipe(self, x1, y1, x2, y2, duration=500):
         """Swipe from (x1,y1) to (x2,y2) using ADB"""
         if not self.device:
-            print("No device connected")
+            self.logger.error("No device connected")
             return False
         
         try:
             self.device.shell(f"input swipe {x1} {y1} {x2} {y2} {duration}")
             return True
         except Exception as e:
-            print(f"Failed to swipe: {e}")
+            self.logger.error(f"Failed to swipe: {e}")
             return False
 
-    def capture_area(self, save_path):
+    def capture_area(self, save_path, screenshot=None):
         """Capture screenshot of game area using ADB"""
-        screenshot = self._take_screenshot()
+        if screenshot is None:
+            screenshot = self._take_screenshot()
         if screenshot:
             # Crop to game area
             cropped = screenshot.crop((self.TOP_LEFT_X, self.TOP_LEFT_Y, self.BOTTOM_RIGHT_X, self.BOTTOM_RIGHT_Y))
             cropped.save(save_path)
         else:
-            print("Failed to capture screenshot")
+            self.logger.error("Failed to capture screenshot")
 
     def capture_card_area(self, save_path):
         """Capture screenshot of card area using ADB"""
@@ -127,13 +149,14 @@ class Actions:
             ))
             cropped.save(save_path)
         else:
-            print("Failed to capture card area screenshot")
+            self.logger.error("Failed to capture card area screenshot")
 
+    @timing_decorator
     def capture_individual_cards(self):
         """Capture and split card bar into individual card images using ADB"""
         screenshot = self._take_screenshot()
         if not screenshot:
-            print("Failed to capture screenshot for individual cards")
+            self.logger.error("Failed to capture screenshot for individual cards")
             return []
             
         # Crop to card bar area
@@ -152,17 +175,18 @@ class Actions:
         for i in range(4):
             left = i * card_width
             card_img = card_bar.crop((left, 0, left + card_width, self.CARD_BAR_HEIGHT))
-            save_path = os.path.join(self.script_dir, 'screenshots', f"card_{i+1}.png")
-            # card_img.save(save_path)
+            save_path = os.path.join(self.script_dir, 'screenshots', f"{self.device_serial}_card_{i+1}.png")
+            card_img.save(save_path)
             cards.append(save_path)
-        
+
         return cards
 
-    def count_elixir(self):
+    def count_elixir(self, screenshot=None):
         """Count elixir using ADB screenshot analysis"""
-        screenshot = self._take_screenshot()
+        if screenshot is None:
+            screenshot = self._take_screenshot()
         if not screenshot:
-            print("Failed to capture screenshot for elixir counting")
+            self.logger.error("Failed to capture screenshot for elixir counting")
             return 0
             
         # Convert PIL image to numpy array for OpenCV processing
@@ -212,7 +236,7 @@ class Actions:
         # Load template
         template = cv2.imread(template_path)
         if template is None:
-            print(f"Could not load template: {template_path}")
+            self.logger.error(f"Could not load template: {template_path}")
             return None
             
         # Perform template matching
@@ -230,25 +254,25 @@ class Actions:
 
     def card_play(self, x, y, card_index):
         """Play a card using ADB commands"""
-        print(f"Playing card {card_index} at position ({x}, {y})")
         if card_index in range(4):  # Valid card indices are 0-3
             # Calculate card position in the deck
             card_width = self.CARD_BAR_WIDTH // 4
             card_center_x = self.CARD_BAR_X + (card_index * card_width) + (card_width // 2)
             card_center_y = self.CARD_BAR_Y + (self.CARD_BAR_HEIGHT // 2)
-            
-            print(f"Clicking on card {card_index} at deck position ({card_center_x}, {card_center_y})")
+
+            self.logger.info(f"Clicking on card {card_index} at deck position ({card_center_x}, {card_center_y})")
             self._click(card_center_x, card_center_y)
-            time.sleep(0.2)
+            time.sleep(0.1)
             
-            print(f"Placing card at battlefield position ({x}, {y})")
             if y > 1440:
                 y = 1440
             if x > 1070:
                 x = 1070
+
+            self.logger.info(f"Placing card at battlefield position ({x}, {y})")
             self._click(x, y)
         else:
-            print(f"Invalid card index: {card_index} (must be 0-3)")
+            self.logger.error(f"Invalid card index: {card_index} (must be 0-3)")
 
     def click_battle_start(self):
         """Find and click the battle start button using ADB and template matching"""
@@ -260,17 +284,17 @@ class Actions:
 
         while True:
             for confidence in confidences:
-                print(f"Looking for battle start button (confidence: {confidence})")
+                self.logger.debug(f"Looking for battle start button (confidence: {confidence})")
                 result = self._find_template(button_image, confidence, battle_button_region)
                 if result:
                     x, y, match_confidence = result
-                    print(f"Found battle button at ({x}, {y}) with confidence {match_confidence}")
+                    self.logger.info(f"Found battle button at ({x}, {y}) with confidence {match_confidence}")
                     self._click(x, y)
                     time.sleep(2)
                     return
 
             # If button not found, click to clear screens
-            print("Button not found, clicking to clear screens...")
+            self.logger.info("Button not found, clicking to clear screens...")
             self._click(640, 200)  # Center-ish click in device coordinates
             time.sleep(1)
 
@@ -289,11 +313,11 @@ class Actions:
                 result = self._find_template(winner_img, confidence, winner_region)
                 if result:
                     x, y, match_confidence = result
-                    print(f"Found 'Winner' at ({x}, {y}) with confidence {match_confidence}")
+                    self.logger.debug(f"Found 'Winner' at ({x}, {y}) with confidence {match_confidence}")
                     
                     # Determine if victory or defeat based on position
                     result_type = "victory" if y > 300 else "defeat"  # Adjust threshold based on device
-                    print(f"Game result: {result_type}")
+                    self.logger.info(f"Game result: {result_type}")
                     time.sleep(3)
                     
                     # # Click the "Play Again" button at device coordinates
@@ -303,7 +327,7 @@ class Actions:
 
                     # Click the "OK" button to close the result screen
                     ok_x, ok_y = 540, 1700
-                    print(f"Clicking OK")
+                    self.logger.debug.print(f"Clicking OK")
                     self._click(ok_x, ok_y)
 
                     return result_type
@@ -322,7 +346,8 @@ class Actions:
         for confidence in confidences:
             result = self._find_template(matchover_img, confidence, region)
             if result:
-                print("Match over detected!")
+                self.logger.info("Match over detected!")
                 return True
                 
         return False
+    
