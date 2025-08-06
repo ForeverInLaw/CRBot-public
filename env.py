@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from Actions import Actions
 from inference_sdk import InferenceHTTPClient
 from utils import timing_decorator
-from cards import CARD_TO_ID, ID_TO_CARD
+from cards import CARDS_DATA, ID_TO_CARD, SPELL_CARDS
 
 # Load environment variables from .env file
 load_dotenv()
@@ -14,14 +14,12 @@ load_dotenv()
 MAX_ENEMIES = 10
 MAX_ALLIES = 10
 
-SPELL_CARDS = ["Fireball", "Zap", "Arrows", "Tornado", "Rocket", "Lightning", "Freeze"]
-
 class ClashRoyaleEnv:
     def __init__(self):
         self.actions = Actions()
         self.rf_model = self.setup_roboflow()
         self.card_model = self.setup_card_roboflow()
-        self.state_size = 1 + 2 * (MAX_ALLIES + MAX_ENEMIES) + self.num_cards
+        self.state_size = 1 + 2 * (MAX_ALLIES + MAX_ENEMIES) + self.num_cards * 2
 
         self.num_cards = 4
         self.grid_width = 18
@@ -131,7 +129,7 @@ class ClashRoyaleEnv:
                 # time.sleep(1)  # You can reduce this if needed
 
                 # --- Spell penalty logic ---
-                if card_name in SPELL_CARDS:
+                if card_name.lower() in SPELL_CARDS:
                     print(f"Played spell card: {card_name}")
                     enemy_positions = []
                     for i in range(1 + 2 * MAX_ALLIES, 1 + 2 * MAX_ALLIES + 2 * MAX_ENEMIES, 2):
@@ -251,12 +249,18 @@ class ClashRoyaleEnv:
         ally_flat = [coord for pos in ally_positions for coord in pos]
         enemy_flat = [coord for pos in enemy_positions for coord in pos]
 
-        # Add current cards to state
-        card_ids = [CARD_TO_ID.get(c, 0) for c in self.current_cards]
+        # Add current cards and their elixir costs to state
+        card_info = []
+        for card_name in self.current_cards:
+            card_data = CARDS_DATA.get(card_name.lower(), CARDS_DATA["unknown"])
+            card_id = card_data["id"]
+            elixir_cost = card_data["elixir"] / 10.0  # Normalize elixir cost
+            card_info.extend([card_id, elixir_cost])
+        
         # Pad with 0 if less than num_cards
-        card_ids += [0] * (self.num_cards - len(card_ids))
+        card_info += [0] * (self.num_cards * 2 - len(card_info))
 
-        state = np.array([elixir / 10.0] + ally_flat + enemy_flat + card_ids, dtype=np.float32)
+        state = np.array([elixir / 10.0] + ally_flat + enemy_flat + card_info, dtype=np.float32)
         return state
 
     def _compute_reward(self, state):
