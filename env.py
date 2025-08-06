@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from Actions import Actions
 from inference_sdk import InferenceHTTPClient
 from utils import timing_decorator
+from cards import CARD_TO_ID, ID_TO_CARD
 
 # Load environment variables from .env file
 load_dotenv()
@@ -20,7 +21,7 @@ class ClashRoyaleEnv:
         self.actions = Actions()
         self.rf_model = self.setup_roboflow()
         self.card_model = self.setup_card_roboflow()
-        self.state_size = 1 + 2 * (MAX_ALLIES + MAX_ENEMIES)
+        self.state_size = 1 + 2 * (MAX_ALLIES + MAX_ENEMIES) + self.num_cards
 
         self.num_cards = 4
         self.grid_width = 18
@@ -113,36 +114,39 @@ class ClashRoyaleEnv:
             return next_state, 0, False
 
         action = self.available_actions[action_index]
-        card_index, x_frac, y_frac = action
-        print(f"Action selected: card_index={card_index}, x_frac={x_frac:.2f}, y_frac={y_frac:.2f}")
+        print(f"Action selected: {action}")
 
         spell_penalty = 0
 
-        if card_index != -1 and card_index < len(self.current_cards):
-            card_name = self.current_cards[card_index]
-            print(f"Attempting to play {card_name}")
-            x = int(x_frac * self.actions.WIDTH)
-            y = int(y_frac * self.actions.HEIGHT)
-            self.actions.card_play(x, y, card_index)
-            # time.sleep(1)  # You can reduce this if needed
+        if action["type"] == "PLAY":
+            card_index = action["card"]
+            x_frac = action["x"]
+            y_frac = action["y"]
+            if card_index < len(self.current_cards):
+                card_name = self.current_cards[card_index]
+                print(f"Attempting to play {card_name}")
+                x = int(x_frac * self.actions.WIDTH)
+                y = int(y_frac * self.actions.HEIGHT)
+                self.actions.card_play(x, y, card_index)
+                # time.sleep(1)  # You can reduce this if needed
 
-            # --- Spell penalty logic ---
-            if card_name in SPELL_CARDS:
-                print(f"Played spell card: {card_name}")
-                enemy_positions = []
-                for i in range(1 + 2 * MAX_ALLIES, 1 + 2 * MAX_ALLIES + 2 * MAX_ENEMIES, 2):
-                    ex = next_state[i]
-                    ey = next_state[i + 1]
-                    if ex != 0.0 or ey != 0.0:
-                        ex_px = int(ex * self.actions.WIDTH)
-                        ey_px = int(ey * self.actions.HEIGHT)
-                        enemy_positions.append((ex_px, ey_px))
-                radius = 100
-                found_enemy = any((abs(ex - x) ** 2 + abs(ey - y) ** 2) ** 0.5 < radius for ex, ey in enemy_positions)
-                print(f"Spell hit enemy: {found_enemy} at positions {enemy_positions}")
-                if not found_enemy:
-                    spell_penalty = -5  # Penalize for wasting spell
-            next_state = self._get_state()  # Update state after playing card
+                # --- Spell penalty logic ---
+                if card_name in SPELL_CARDS:
+                    print(f"Played spell card: {card_name}")
+                    enemy_positions = []
+                    for i in range(1 + 2 * MAX_ALLIES, 1 + 2 * MAX_ALLIES + 2 * MAX_ENEMIES, 2):
+                        ex = next_state[i]
+                        ey = next_state[i + 1]
+                        if ex != 0.0 or ey != 0.0:
+                            ex_px = int(ex * self.actions.WIDTH)
+                            ey_px = int(ey * self.actions.HEIGHT)
+                            enemy_positions.append((ex_px, ey_px))
+                    radius = 100
+                    found_enemy = any((abs(ex - x) ** 2 + abs(ey - y) ** 2) ** 0.5 < radius for ex, ey in enemy_positions)
+                    print(f"Spell hit enemy: {found_enemy} at positions {enemy_positions}")
+                    if not found_enemy:
+                        spell_penalty = -5  # Penalize for wasting spell
+                next_state = self._get_state()  # Update state after playing card
             
         # --- Princess tower reward logic ---
         current_enemy_princess_towers = self._count_enemy_princess_towers()
@@ -247,7 +251,12 @@ class ClashRoyaleEnv:
         ally_flat = [coord for pos in ally_positions for coord in pos]
         enemy_flat = [coord for pos in enemy_positions for coord in pos]
 
-        state = np.array([elixir / 10.0] + ally_flat + enemy_flat, dtype=np.float32)
+        # Add current cards to state
+        card_ids = [CARD_TO_ID.get(c, 0) for c in self.current_cards]
+        # Pad with 0 if less than num_cards
+        card_ids += [0] * (self.num_cards - len(card_ids))
+
+        state = np.array([elixir / 10.0] + ally_flat + enemy_flat + card_ids, dtype=np.float32)
         return state
 
     def _compute_reward(self, state):
@@ -313,13 +322,15 @@ class ClashRoyaleEnv:
 
     def get_available_actions(self):
         """Generate all possible actions"""
-        actions = [
-            [card, x / (self.grid_width - 1), y / (self.grid_height - 1)]
-            for card in range(self.num_cards)
-            for x in range(self.grid_width)
-            for y in range(self.grid_height)
-        ]
-        actions.append([-1, 0, 0])  # No-op action
+        actions = []
+        # Card playing actions
+        for card_index in range(self.num_cards):
+            for x in range(self.grid_width):
+                for y in range(self.grid_height):
+                    actions.append({"type": "PLAY", "card": card_index, "x": x / (self.grid_width - 1), "y": y / (self.grid_height - 1)})
+        
+        # No-op action
+        actions.append({"type": "NO_OP"})
         return actions
 
     def _endgame_watcher(self):
