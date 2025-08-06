@@ -74,7 +74,7 @@ A Python-based Clash Royale AI bot that learns and improves through gameplay. Th
 * [Python 3.12](https://www.python.org/downloads/windows/)
 * Install the requirements:
 ```
-pip install -r requirements.txt
+pip install -r requirements.txt -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
 ``` 
   
 ### Installation

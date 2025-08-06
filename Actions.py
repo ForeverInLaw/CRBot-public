@@ -9,22 +9,31 @@ import time
 import platform
 from functools import wraps
 from logger import Logger
+from text_recognition import TextRecognitionSingleton
 
-# Performance decorator
+
+# Enhanced performance decorator with logger support
 def timing_decorator(func):
     @wraps(func)
-    def wrapper(*args, **kwargs):
+    def wrapper(self, *args, **kwargs):
         start_time = time.time()
-        result = func(*args, **kwargs)
+        result = func(self, *args, **kwargs)
         end_time = time.time()
-        print(f"[Performance] {func.__name__:<25} took {end_time - start_time:.4f} seconds")
+        execution_time = end_time - start_time
+        
+        # Use class logger if available, otherwise fall back to print
+        if hasattr(self, 'logger') and self.logger:
+            self.logger.debug(f"[Performance] {func.__name__:<25} took {execution_time:.4f} seconds")
+        else:
+            print(f"[Performance] {func.__name__:<25} took {execution_time:.4f} seconds")
+            
         return result
     return wrapper
 
 class Actions:
     def __init__(self, device_serial=None):
         # Initialize logger with device serial
-        self.logger = Logger(name="Actions", device_serial=device_serial, log_level="DEBUG")
+        self.logger = Logger(name="Actions", device_serial=device_serial, log_level="INFO")
         self.device_serial = device_serial
         
         self.os_type = platform.system()
@@ -93,7 +102,7 @@ class Actions:
         try:
             screenshot_data = self.device.screencap()
             screenshot = Image.open(io.BytesIO(screenshot_data))
-            self.last_screenshot = screenshot
+            self.last_screenshot = screenshot.copy()
             return screenshot
         except Exception as e:
             self.logger.error(f"Failed to take screenshot: {e}")
@@ -181,47 +190,41 @@ class Actions:
 
         return cards
 
-    def count_elixir(self, screenshot=None):
+    def count_elixir(self):
         """Count elixir using ADB screenshot analysis"""
         screenshot = self._take_screenshot()
             
         if not screenshot:
             self.logger.error("Failed to capture screenshot for elixir counting")
             return 0
-            
-        # Convert PIL image to numpy array for OpenCV processing
-        screenshot_np = np.array(screenshot)
-        
-        # Define elixir bar region in device coordinates (you may need to adjust these)
-        elixir_y = 650  # Approximate Y coordinate of elixir bar
-        elixir_start_x = 400  # Start X coordinate
-        elixir_end_x = 880    # End X coordinate  
-        elixir_spacing = 48   # Spacing between elixir icons
-        
-        target = (225, 128, 229)  # Target purple color for elixir
-        tolerance = 80
-        count = 0
-        
-        # Check each elixir position
-        for x in range(elixir_start_x, elixir_end_x, elixir_spacing):
-            if x < screenshot_np.shape[1] and elixir_y < screenshot_np.shape[0]:
-                # Get pixel color at elixir position (convert from RGB to BGR for OpenCV)
-                b, g, r = screenshot_np[elixir_y, x][:3]  # OpenCV uses BGR format
-                
-                # Check if color matches elixir color within tolerance
-                if (abs(r - target[0]) <= tolerance and 
-                    abs(g - target[1]) <= tolerance and 
-                    abs(b - target[2]) <= tolerance):
-                    count += 1
-                    
-        return min(count, 10)  # Cap at 10 elixir
 
-    def _find_template(self, template_path, confidence=0.8, region=None):
+        # Define elixir bar region in device coordinates (you may need to adjust these)
+        elixir_start_y = 1818  # Approximate Y coordinate of elixir bar
+        elixir_end_y = 1890  # Approximate Y coordinate of elixir bar
+        elixir_start_x = 280  # Start X coordinate
+        elixir_end_x = 360    # End X coordinate
+
+
+        # Convert PIL image to numpy array for OpenCV processing
+        cropped = screenshot.crop((elixir_start_x, elixir_start_y, elixir_end_x, elixir_end_y))
+        cropped.save(os.path.join(self.script_dir, 'screenshots', f"{self.device_serial}_elixir_bar.png"))
+        screenshot_np = np.array(cropped)
+        
+
+        text_recognition = TextRecognitionSingleton()
+        result = text_recognition.model.predict(input="screenshots/" + f"{self.device_serial}_elixir_bar.png")
+
+        print(result)
+        print(result[0]['rec_text'])
+        return int(result[0]['rec_text']) if result and result[0]['rec_text'].isnumeric() else 0
+
+    def _find_template(self, template_path, confidence=0.8, region=None, screenshot=None):
         """Find template image in screenshot using OpenCV template matching"""
-        screenshot = self._take_screenshot()
+        screenshot = screenshot or self._take_screenshot()
+        
         if not screenshot:
             return None
-            
+
         # Convert PIL to OpenCV format
         screenshot_cv = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
         
@@ -296,7 +299,26 @@ class Actions:
             # If button not found, click to clear screens
             self.logger.info("Button not found, clicking to clear screens...")
             self._click(640, 200)  # Center-ish click in device coordinates
-            time.sleep(1)
+            
+            # Check for popups and click OK if found
+            self.click_ok_button()
+
+    def click_ok_button(self):
+        """Click the OK button to close popups"""
+        ok_button_image = os.path.join(self.images_folder, "okbutton.png")
+        confidences = [0.8]
+
+        # Define the region for the OK button in device coordinates
+        ok_button_region = (0, 0, 1080, 1920)  # Adjust based on your device resolution
+        for confidence in confidences:
+            self.logger.debug(f"Looking for OK button (confidence: {confidence})")
+            result = self._find_template(ok_button_image, confidence, ok_button_region)
+            if result:
+                x, y, match_confidence = result
+                self.logger.info(f"Found OK button at ({x}, {y}) with confidence {match_confidence}")
+                self._click(x, y)
+                time.sleep(2)
+                return
 
     def detect_game_end(self):
         """Detect game end using ADB and template matching"""
@@ -309,30 +331,16 @@ class Actions:
 
             for confidence in confidences:
                 # print(f"\nTrying detection with confidence: {confidence}")
-                
-                result = self._find_template(winner_img, confidence, winner_region)
+
+                result = self._find_template(winner_img, confidence, winner_region, screenshot=self.last_screenshot)
                 if result:
                     x, y, match_confidence = result
                     self.logger.debug(f"Found 'Winner' at ({x}, {y}) with confidence {match_confidence}")
                     
                     # Determine if victory or defeat based on position
-                    result_type = "victory" if y > 300 else "defeat"  # Adjust threshold based on device
-                    self.logger.info(f"Game result: {result_type}")
-                    time.sleep(3)
-                    
-                    # # Click the "Play Again" button at device coordinates
-                    # play_again_x, play_again_y = 640, 650  # Adjust based on your device resolution
-                    # print(f"Clicking Play Again at ({play_again_x}, {play_again_y})")
-                    # self._click(play_again_x, play_again_y)
-
-                    # Click the "OK" button to close the result screen
-                    ok_x, ok_y = 540, 1700
-                    self.logger.debug.print(f"Clicking OK")
-                    self._click(ok_x, ok_y)
-
-                    return result_type
+                    return "victory" if y > 300 else "defeat"
         except Exception as e:
-            print(f"Error in game end detection: {str(e)}")
+            self.logger.error(f"Error in game end detection: {str(e)}")
         return None
 
     def detect_match_over(self):
@@ -344,10 +352,9 @@ class Actions:
         region = (100, 570, 900, 200)  # Adjust based on your device resolution
         
         for confidence in confidences:
-            result = self._find_template(matchover_img, confidence, region)
+            result = self._find_template(matchover_img, confidence, region, screenshot=self.last_screenshot)
             if result:
                 self.logger.info("Match over detected!")
                 return True
                 
         return False
-    

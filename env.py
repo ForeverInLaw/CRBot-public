@@ -21,21 +21,28 @@ SPELL_CARDS = ["Fireball", "Zap", "Arrows", "Tornado", "Rocket", "Lightning", "F
 
 from functools import wraps
 
-# Performance decorator
+# Enhanced performance decorator with logger support
 def timing_decorator(func):
     @wraps(func)
-    def wrapper(*args, **kwargs):
+    def wrapper(self, *args, **kwargs):
         start_time = time.time()
-        result = func(*args, **kwargs)
+        result = func(self, *args, **kwargs)
         end_time = time.time()
-        print(f"[Performance] {func.__name__:<25} took {end_time - start_time:.4f} seconds")
+        execution_time = end_time - start_time
+        
+        # Use class logger if available, otherwise fall back to print
+        if hasattr(self, 'logger') and self.logger:
+            self.logger.debug(f"[Performance] {func.__name__:<25} took {execution_time:.4f} seconds")
+        else:
+            print(f"[Performance] {func.__name__:<25} took {execution_time:.4f} seconds")
+            
         return result
     return wrapper
 
 class ClashRoyaleEnv:
     def __init__(self, device_serial=None):
         # Initialize logger with device serial
-        self.logger = Logger(name="ClashRoyaleEnv", device_serial=device_serial, log_level="DEBUG")
+        self.logger = Logger(name="ClashRoyaleEnv", device_serial=device_serial, log_level="INFO")
         self.device_serial = device_serial
         
         self.actions = Actions(device_serial=device_serial)
@@ -64,8 +71,6 @@ class ClashRoyaleEnv:
         self.prev_enemy_presence = None
 
         self.prev_enemy_princess_towers = None
-
-        self.match_over_detected = False
 
     def _load_card_data(self):
         card_data_path = os.path.join(os.path.dirname(__file__), 'cards.json')
@@ -121,6 +126,9 @@ class ClashRoyaleEnv:
         if self.match_over_detected:
             action_index = len(self.available_actions) - 1  # No-op action
 
+        self.current_cards = self.detect_cards_in_hand()
+        self.logger.info(f"Current cards in hand: {self.current_cards}")
+
         if self.game_over_flag:
             done = True
             state = self._get_state()
@@ -131,13 +139,10 @@ class ClashRoyaleEnv:
                 self.logger.success("Victory detected - ending episode")
             elif result == "defeat":
                 reward -= 100
-                self.logger.error("Defeat detected - ending episode")
-            self.match_over_detected = False  # Reset for next episode
+                self.logger.success("Defeat detected - ending episode")
+
             return state, reward, done, result
-
-        self.current_cards = self.detect_cards_in_hand()
-        self.logger.info(f"Current cards in hand: {self.current_cards}")
-
+        
         # If all cards are "Unknown", click at center and return no-op
         if all(card == "Unknown" for card in self.current_cards):
             self.logger.warning("All cards are Unknown, clicking at center and skipping move.")
@@ -173,6 +178,7 @@ class ClashRoyaleEnv:
                         enemy_positions.append((ex_px, ey_px))
                 radius = 100
                 found_enemy = any((abs(ex - x) ** 2 + abs(ey - y) ** 2) ** 0.5 < radius for ex, ey in enemy_positions)
+                self.logger.info(f"Spell used: {card_name}, found_enemy: {found_enemy}, enemy_positions: {enemy_positions}")
                 if not found_enemy:
                     spell_penalty = -5  # Penalize for wasting spell
 
@@ -385,20 +391,19 @@ class ClashRoyaleEnv:
     def _endgame_watcher(self):
         """Thread that watches for both match over and game end conditions"""
         while not self._endgame_thread_stop.is_set():
-            # Check for match over first (during game)
-            if not self.match_over_detected and hasattr(self.actions, "detect_match_over"):
-                if self.actions.detect_match_over():
-                    self.logger.warning("Match over detected (matchover.png), forcing no-op until next game.")
-                    self.match_over_detected = True
-            
             # Check for game end (victory/defeat screen)
             result = self.actions.detect_game_end()
+            
             if result:
+                self.logger.success(f"Game ended with result: {result}")
                 self.game_over_flag = result
+                time.sleep(5)
+                
+                self.actions.click_ok_button()
                 break
             
             # Sleep a bit to avoid hammering the CPU
-            time.sleep(0.5)
+            time.sleep(0.3)
 
     def _count_enemy_princess_towers(self):
         # Considering count enemy princess is called only from step function and step function already has a **fresh** screenshot, we can skip taking a new screenshot here
