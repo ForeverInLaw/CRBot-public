@@ -29,6 +29,7 @@ class Actions:
         # These need to be adjusted based on your BlueStacks resolution and Clash Royale layout
         self.TOP_LEFT_X = 0
         self.TOP_LEFT_Y = 0
+        
         self.BOTTOM_RIGHT_X = self.device_width
         self.BOTTOM_RIGHT_Y = self.device_height
         self.FIELD_AREA = (self.TOP_LEFT_X, self.TOP_LEFT_Y, self.BOTTOM_RIGHT_X, self.BOTTOM_RIGHT_Y)
@@ -50,7 +51,7 @@ class Actions:
                 print("No ADB devices found. Make sure BlueStacks is running and ADB is enabled.")
                 print("Run setup_adb.py first to configure ADB connection.")
                 return False
-            
+             
             # Usually BlueStacks appears as the first device, but you might need to select the right one
             self.device = devices[0]
             print("Successfully connected to ADB device: ", self.device.serial)
@@ -217,15 +218,14 @@ class Actions:
             
         # Perform template matching
         result = cv2.matchTemplate(screenshot_cv, template, cv2.TM_CCOEFF_NORMED)
-        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
-        
+        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)        
         if max_val >= confidence:
             # Return center coordinates with offset
             template_h, template_w = template.shape[:2]
             center_x = max_loc[0] + template_w // 2 + offset_x
             center_y = max_loc[1] + template_h // 2 + offset_y
             return (center_x, center_y, max_val)
-        
+       
         return None
 
     def card_play(self, x, y, card_index):
@@ -272,6 +272,10 @@ class Actions:
 
             # If button not found, click to clear screens
             self.click_ok_button()  # Click OK button if any popups appear
+
+            print("Button not found, clicking to clear screens...")
+            self._click(640, 200)  # Center-ish click in device coordinates
+            time.sleep(1)
 
     @timing_decorator
     def detect_game_end(self):
