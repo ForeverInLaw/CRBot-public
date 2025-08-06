@@ -7,6 +7,8 @@ from collections import deque
 import numpy as np
 from utils import timing_decorator
 
+from utils import timing_decorator
+
 class DQN(nn.Module):
     def __init__(self, input_dim, output_dim):
         super(DQN, self).__init__()

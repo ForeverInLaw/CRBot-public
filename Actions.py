@@ -11,6 +11,8 @@ import traceback
 from utils import take_screenshot, timing_decorator
 from logger import Logger
 
+from utils import take_screenshot, timing_decorator
+
 class Actions:
     def __init__(self):
         self.logger = Logger(name="Actions")
