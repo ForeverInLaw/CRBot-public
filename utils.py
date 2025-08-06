@@ -5,6 +5,7 @@ from PIL import Image
 from setup_adb import find_adb_executable
 
 ADB_PATH = find_adb_executable()
+DEBUGGING = False
 
 def timing_decorator(func):
     @wraps(func)
@@ -14,11 +15,12 @@ def timing_decorator(func):
         end_time = time.time()
         execution_time = end_time - start_time
 
-        # Use class logger if available, otherwise fall back to print
-        if hasattr(self, 'logger') and self.logger:
-            self.logger.debug(f"[Performance] {func.__name__:<25} took {execution_time:.4f} seconds")
-        else:
-            print(f"[Performance] {func.__name__:<25} took {execution_time:.4f} seconds")
+        if DEBUGGING:
+            # Use class logger if available, otherwise fall back to print
+            if hasattr(self, 'logger') and self.logger:
+                self.logger.debug(f"[Performance] {func.__name__:<25} took {execution_time:.4f} seconds")
+            else:
+                print(f"[Performance] {func.__name__:<25} took {execution_time:.4f} seconds")
 
         return result
     return wrapper

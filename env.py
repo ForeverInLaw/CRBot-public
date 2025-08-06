@@ -7,21 +7,23 @@ from Actions import Actions
 from inference_sdk import InferenceHTTPClient
 from utils import timing_decorator
 from cards import CARDS_DATA, ID_TO_CARD, SPELL_CARDS
+from logger import Logger
 
 # Load environment variables from .env file
 load_dotenv()
 
 MAX_ENEMIES = 10
 MAX_ALLIES = 10
+NUM_CARDS = 4
 
 class ClashRoyaleEnv:
     def __init__(self):
+        self.logger = Logger(name="ClashRoyaleEnv")
         self.actions = Actions()
         self.rf_model = self.setup_roboflow()
         self.card_model = self.setup_card_roboflow()
-        self.state_size = 1 + 2 * (MAX_ALLIES + MAX_ENEMIES) + self.num_cards * 2
+        self.state_size = 1 + 2 * (MAX_ALLIES + MAX_ENEMIES) + NUM_CARDS * 2
 
-        self.num_cards = 4
         self.grid_width = 18
         self.grid_height = 28
 
@@ -94,25 +96,25 @@ class ClashRoyaleEnv:
             result = self.game_over_flag
             if result == "victory":
                 reward += 100
-                print("Victory detected - ending episode")
+                self.logger.success("Victory detected - ending episode")
             elif result == "defeat":
                 reward -= 100
-                print("Defeat detected - ending episode")
+                self.logger.warning("Defeat detected - ending episode")
             return next_state, reward, done
 
         self.current_cards = self.detect_cards_in_hand()
-        print("\nCurrent cards in hand:", self.current_cards)
+        self.logger.info(f"Current cards in hand: {self.current_cards}")
 
         # If all cards are "Unknown", click at center and return no-op
         if all(card == "Unknown" for card in self.current_cards):
-            print("All cards are Unknown, clicking at center and skipping move.")
+            self.logger.warning("All cards are Unknown, clicking at center and skipping move.")
             self.actions._click(640, 400)  # Click at center of screen in device coordinates
             # Return current state, zero reward, not done
             next_state = self._get_state()
             return next_state, 0, False
 
         action = self.available_actions[action_index]
-        print(f"Action selected: {action}")
+        self.logger.info(f"Action selected: {action}")
 
         spell_penalty = 0
 
@@ -122,7 +124,7 @@ class ClashRoyaleEnv:
             y_frac = action["y"]
             if card_index < len(self.current_cards):
                 card_name = self.current_cards[card_index]
-                print(f"Attempting to play {card_name}")
+                self.logger.info(f"Attempting to play {card_name}")
                 x = int(x_frac * self.actions.WIDTH)
                 y = int(y_frac * self.actions.HEIGHT)
                 self.actions.card_play(x, y, card_index)
@@ -130,7 +132,7 @@ class ClashRoyaleEnv:
 
                 # --- Spell penalty logic ---
                 if card_name.lower() in SPELL_CARDS:
-                    print(f"Played spell card: {card_name}")
+                    self.logger.extra_visibility(f"Played spell card: {card_name}")
                     enemy_positions = []
                     for i in range(1 + 2 * MAX_ALLIES, 1 + 2 * MAX_ALLIES + 2 * MAX_ENEMIES, 2):
                         ex = next_state[i]
@@ -141,8 +143,9 @@ class ClashRoyaleEnv:
                             enemy_positions.append((ex_px, ey_px))
                     radius = 100
                     found_enemy = any((abs(ex - x) ** 2 + abs(ey - y) ** 2) ** 0.5 < radius for ex, ey in enemy_positions)
-                    print(f"Spell hit enemy: {found_enemy} at positions {enemy_positions}")
+                    self.logger.extra_visibility(f"Spell hit enemy: {found_enemy} at positions {enemy_positions}")
                     if not found_enemy:
+                        self.logger.warning(f"Spell {card_name} did not hit any enemy, applying penalty.")
                         spell_penalty = -5  # Penalize for wasting spell
                 next_state = self._get_state()  # Update state after playing card
             
@@ -185,7 +188,7 @@ class ClashRoyaleEnv:
                 predictions = first["predictions"]
 
         if not predictions:
-            print("WARNING: No predictions found in results")
+            self.logger.warning("WARNING: No predictions found in results")
             return None
 
         # After getting 'predictions' from results:
@@ -193,8 +196,8 @@ class ClashRoyaleEnv:
             predictions = predictions["predictions"]
 
         for p in predictions:
-            print(f"{p['class']} at ({p['x']}, {p['y']}) with confidence {p['confidence']:.2f}")
-        print("Detected classes:", [repr(p.get("class", "")) for p in predictions if isinstance(p, dict)])
+            self.logger.debug(f"{p['class']} at ({p['x']}, {p['y']}) with confidence {p['confidence']:.2f}")
+        self.logger.debug(f"Detected classes: {[repr(p.get('class', '')) for p in predictions if isinstance(p, dict)]}")
 
         TOWER_CLASSES = {
             "ally king tower",
@@ -228,8 +231,8 @@ class ClashRoyaleEnv:
             )
         ]
 
-        print("Allies:", allies)
-        print("Enemies:", enemies)
+        self.logger.debug(f"Allies: {allies}")
+        self.logger.debug(f"Enemies: {enemies}")
 
         # Normalize positions
         def normalize(units):
@@ -258,7 +261,7 @@ class ClashRoyaleEnv:
             card_info.extend([card_id, elixir_cost])
         
         # Pad with 0 if less than num_cards
-        card_info += [0] * (self.num_cards * 2 - len(card_info))
+        card_info += [0] * (NUM_CARDS * 2 - len(card_info))
 
         state = np.array([elixir / 10.0] + ally_flat + enemy_flat + card_info, dtype=np.float32)
         return state
@@ -291,7 +294,7 @@ class ClashRoyaleEnv:
     def detect_cards_in_hand(self):
         try:
             card_paths = self.actions.capture_individual_cards()
-            print("\nTesting individual card predictions:")
+            self.logger.debug("\nTesting individual card predictions:")
 
             cards = []
             workspace_name = os.getenv('WORKSPACE_CARD_DETECTION')
@@ -304,7 +307,7 @@ class ClashRoyaleEnv:
                     workflow_id="custom-workflow",
                     images={"image": card_path}
                 )
-                # print("Card detection raw results:", results)  # Debug print
+                # self.logger.debug(f"Card detection raw results: {results}")  # Debug print
 
                 # Fix: parse nested structure
                 predictions = []
@@ -314,21 +317,21 @@ class ClashRoyaleEnv:
                         predictions = preds_dict.get("predictions", [])
                 if predictions:
                     card_name = predictions[0]["class"]
-                    print(f"Detected card: {card_name}")
+                    self.logger.debug(f"Detected card: {card_name}")
                     cards.append(card_name)
                 else:
-                    print("No card detected.")
+                    self.logger.warning("No card detected.")
                     cards.append("Unknown")
             return cards
         except Exception as e:
-            print(f"Error in detect_cards_in_hand: {e}")
+            self.logger.error(f"Error in detect_cards_in_hand: {e}")
             return []
 
     def get_available_actions(self):
         """Generate all possible actions"""
         actions = []
         # Card playing actions
-        for card_index in range(self.num_cards):
+        for card_index in range(NUM_CARDS):
             for x in range(self.grid_width):
                 for y in range(self.grid_height):
                     actions.append({"type": "PLAY", "card": card_index, "x": x / (self.grid_width - 1), "y": y / (self.grid_height - 1)})
@@ -337,13 +340,36 @@ class ClashRoyaleEnv:
         actions.append({"type": "NO_OP"})
         return actions
 
+    def get_valid_action_mask(self, state):
+        """Generate a mask of valid actions based on the current state."""
+        mask = np.zeros(self.action_size, dtype=bool)
+        current_elixir = state[0] * 10
+
+        # Get card info from state
+        card_info_flat = state[1 + 2 * (MAX_ALLIES + MAX_ENEMIES):]
+        card_ids = [int(card_info_flat[i]) for i in range(0, len(card_info_flat), 2)]
+
+        for i, action in enumerate(self.available_actions):
+            if action["type"] == "NO_OP":
+                mask[i] = True
+                continue
+
+            card_index = action["card"]
+            if card_index < len(card_ids):
+                card_id = card_ids[card_index]
+                if card_id != 0:  # Card exists
+                    card_data = ID_TO_CARD.get(card_id)
+                    if card_data and current_elixir >= card_data["elixir"]:
+                        mask[i] = True
+        return mask
+
     def _endgame_watcher(self):
         """Thread that watches for both match over and game end conditions"""
         while not self._endgame_thread_stop.is_set():
             # Check for match over first (during game)
             if not self.match_over_detected and hasattr(self.actions, "detect_match_over"):
                 if self.actions.detect_match_over():
-                    print("Match over detected (matchover.png), forcing no-op until next game.")
+                    self.logger.info("Match over detected (matchover.png), forcing no-op until next game.")
                     self.match_over_detected = True
             
             # Check for game end (victory/defeat screen)

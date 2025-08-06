@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.optim as optim
 import random
 from collections import deque
-
+import numpy as np
 from utils import timing_decorator
 
 class DQN(nn.Module):
@@ -39,12 +39,21 @@ class DQNAgent:
     def remember(self, s, a, r, s2, done):
         self.memory.append((s, a, r, s2, done))
 
-    def act(self, state):
+    def act(self, state, action_mask=None):
         if random.random() < self.epsilon:
+            if action_mask is not None:
+                valid_actions = np.where(action_mask)[0]
+                if len(valid_actions) > 0:
+                    return np.random.choice(valid_actions)
             return random.randrange(self.action_size)
+        
         state = torch.FloatTensor(state).unsqueeze(0)
         with torch.no_grad():
             q_values = self.model(state)
+        
+        if action_mask is not None:
+            q_values[0][~action_mask] = -float('inf')  # Mask out invalid actions
+            
         return q_values.argmax().item()
 
     @timing_decorator

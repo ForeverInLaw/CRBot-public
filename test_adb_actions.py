@@ -314,7 +314,8 @@ class ADBActionsTester:
             print("9. Template Matching")
             print("10. Swipe Test")
             print("11. Detect Game End")
-            print("12. Run All Tests")
+            print("12. Click OK Button")
+            print("13. Run All Tests")
             print("0. Exit")
             
             choice = input("\nEnter test number: ").strip()
@@ -344,6 +345,8 @@ class ADBActionsTester:
             elif choice == "11":
                 self.actions.detect_game_end()
             elif choice == "12":
+                self.actions.click_ok_button()
+            elif choice == "13":
                 self.run_all_tests()
             else:
                 print("Invalid choice. Please try again.")
