@@ -108,9 +108,7 @@ class Actions:
         """Capture screenshot of game area using ADB"""
         screenshot = self._take_screenshot()
         if screenshot:
-            # Crop to game area
-            cropped = screenshot.crop((self.TOP_LEFT_X, self.TOP_LEFT_Y, self.BOTTOM_RIGHT_X, self.BOTTOM_RIGHT_Y))
-            cropped.save(save_path)
+            screenshot.save(save_path)
         else:
             self.logger.warning("Failed to capture screenshot")
 

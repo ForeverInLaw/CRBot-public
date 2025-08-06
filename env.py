@@ -272,22 +272,49 @@ class ClashRoyaleEnv:
 
         elixir = state[0] * 10
 
-        # Sum all enemy positions (not just the first)
-        enemy_positions = state[1 + 2 * MAX_ALLIES:]  # All enemy x1, y1, x2, y2, ...
-        enemy_presence = sum(enemy_positions)
-
-        reward = -enemy_presence
+        # Extract enemy positions properly (excluding tower positions)
+        enemy_positions = []
+        for i in range(1 + 2 * MAX_ALLIES, 1 + 2 * MAX_ALLIES + 2 * MAX_ENEMIES, 2):
+            ex = state[i]
+            ey = state[i + 1]
+            # Only count non-zero positions as enemy presence
+            if ex != 0.0 or ey != 0.0:
+                enemy_positions.append((ex, ey))
+        
+        # Calculate enemy presence based on valid enemies only
+        enemy_presence = sum(abs(x) + abs(y) for x, y in enemy_positions) if enemy_positions else 0
+        
+        # Debug output to help diagnose the issue
+        self.logger.extra_visibility(f"Enemy valid positions count: {len(enemy_positions)}")
+        
+        # Base reward on enemy presence but with a lower penalty factor
+        # This reduces the strong incentive to do nothing
+        reward = -enemy_presence * 0.5  # Reduced penalty factor
+        
+        # Add a small penalty for no action to encourage the agent to play cards
+        if self.prev_elixir is not None and elixir >= 8:
+            # If elixir is building up (8 or more), apply an inaction penalty
+            reward -= 2.0  # Small penalty for accumulating too much elixir
+            self.logger.extra_visibility(f"Applied inaction penalty for high elixir: {elixir}")
 
         # Elixir efficiency: reward for spending elixir if it reduces enemy presence
         if self.prev_elixir is not None and self.prev_enemy_presence is not None:
-            elixir_spent = self.prev_elixir - elixir
-            enemy_reduced = self.prev_enemy_presence - enemy_presence
-            if elixir_spent > 0 and enemy_reduced > 0:
-                reward += 2 * min(elixir_spent, enemy_reduced)  # tune this factor
+            elixir_spent = max(0, self.prev_elixir - elixir)  # Prevent negative values
+            enemy_reduced = max(0, self.prev_enemy_presence - enemy_presence)  # Prevent negative values
+            
+            # Increase the reward for effective elixir spending
+            if elixir_spent > 0:
+                # Give some reward just for spending elixir (encouraging action)
+                reward += elixir_spent * 1.0
+                
+                # Additional reward if spending elixir coincided with reducing enemies
+                if enemy_reduced > 0:
+                    reward += 3.0 * min(elixir_spent, enemy_reduced)  # Increased multiplier
 
         self.prev_elixir = elixir
         self.prev_enemy_presence = enemy_presence
 
+        self.logger.extra_visibility(f"Elixir: {elixir}, Enemy Presence: {enemy_presence}, Reward: {reward}")
         return reward
 
     @timing_decorator
