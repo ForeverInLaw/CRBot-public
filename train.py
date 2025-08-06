@@ -6,6 +6,7 @@ from env import ClashRoyaleEnv
 from dqn_agent import DQNAgent
 from pynput import keyboard
 from datetime import datetime
+from logger import Logger
 
 class KeyboardController:
     def __init__(self):
@@ -32,6 +33,7 @@ def get_latest_model_path(models_dir="models"):
     return model_files[-1]
 
 def train():
+    logger = Logger(name="train")
     env = ClashRoyaleEnv()
     agent = DQNAgent(env.state_size, env.action_size)
 
@@ -48,7 +50,7 @@ def train():
             with open(meta_path, "r") as f:
                 meta = json.load(f)
                 agent.epsilon = meta.get("epsilon", 1.0)
-            print(f"Epsilon loaded: {agent.epsilon}")
+            logger.info(f"Epsilon loaded: {agent.epsilon}")
 
     controller = KeyboardController()
     episodes = 10000
@@ -56,21 +58,23 @@ def train():
 
     for ep in range(episodes):
         if controller.is_exit_requested():
-            print("Training interrupted by user.")
+            logger.info("Training interrupted by user.")
             break
 
         state = env.reset()
-        print(f"Episode {ep + 1} starting. Epsilon: {agent.epsilon:.3f}")  # <-- Add this line
+        logger.info(f"Episode {ep + 1} starting. Epsilon: {agent.epsilon:.3f}")  # <-- Add this line
         total_reward = 0
         done = False
         while not done:
-            action = agent.act(state)
+            action_mask = env.get_valid_action_mask(state)
+            action = agent.act(state, action_mask)
             next_state, reward, done = env.step(action)
             agent.remember(state, action, reward, next_state, done)
             agent.replay(batch_size)
             state = next_state
             total_reward += reward
-        print(f"Episode {ep + 1}: Total Reward = {total_reward:.2f}, Epsilon = {agent.epsilon:.3f}")
+            logger.extra_visibility(f"Step: {state}, Action: {action}, Reward: {reward}, Total Reward: {total_reward}")
+        logger.success(f"Episode {ep + 1}: Total Reward = {total_reward:.2f}, Epsilon = {agent.epsilon:.3f}")
 
         if ep % 10 == 0:
             agent.update_target_model()
@@ -80,7 +84,7 @@ def train():
             torch.save(agent.model.state_dict(), model_path)
             with open(os.path.join("models", f"meta_{timestamp}.json"), "w") as f:
                 json.dump({"epsilon": agent.epsilon}, f)
-            print(f"Model and epsilon saved to {model_path}")
+            logger.success(f"Model and epsilon saved to {model_path}")
 
 if __name__ == "__main__":
     train()
