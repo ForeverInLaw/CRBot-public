@@ -1,12 +1,13 @@
 import os
+from constants import MODEL_DIR
 import torch
 import glob
 import json
-from env import ClashRoyaleEnv
-from dqn_agent import DQNAgent
+from core.environment import ClashRoyaleEnv
+from core.dqn_agent import DQNAgent
 from pynput import keyboard
 from datetime import datetime
-from logger import Logger
+from utils.logger import Logger
 
 class KeyboardController:
     def __init__(self):
@@ -25,8 +26,8 @@ class KeyboardController:
     def is_exit_requested(self):
         return self.should_exit
 
-def get_latest_model_path(models_dir="models"):
-    model_files = glob.glob(os.path.join(models_dir, "model_*.pth"))
+def get_latest_model_path():
+    model_files = glob.glob(os.path.join(MODEL_DIR, "model_*.pth"))
     if not model_files:
         return None
     model_files.sort()  # Lexicographical sort works for timestamps
@@ -38,11 +39,12 @@ def train():
     agent = DQNAgent(env.state_size, env.action_size)
 
     # Ensure models directory exists
-    os.makedirs("models", exist_ok=True)
+    os.makedirs(MODEL_DIR, exist_ok=True)
 
     # Load latest model if available
-    latest_model = get_latest_model_path("models")
+    latest_model = get_latest_model_path()
     if latest_model:
+        print(f"Loading latest model: {latest_model}, {os.path.basename(latest_model)}")
         agent.load(os.path.basename(latest_model))
         # Load epsilon
         meta_path = latest_model.replace("model_", "meta_").replace(".pth", ".json")
@@ -80,9 +82,9 @@ def train():
             agent.update_target_model()
             # Save model and epsilon every 10 episodes
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            model_path = os.path.join("models", f"model_{timestamp}.pth")
+            model_path = os.path.join(MODEL_DIR, f"model_{timestamp}.pth")
             torch.save(agent.model.state_dict(), model_path)
-            with open(os.path.join("models", f"meta_{timestamp}.json"), "w") as f:
+            with open(os.path.join(MODEL_DIR, f"meta_{timestamp}.json"), "w") as f:
                 json.dump({"epsilon": agent.epsilon}, f)
             logger.success(f"Model and epsilon saved to {model_path}")
 
