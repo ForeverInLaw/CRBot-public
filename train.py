@@ -73,7 +73,8 @@ def train():
             agent.replay(batch_size)
             state = next_state
             total_reward += reward
-        logger.info(f"Episode {ep + 1}: Total Reward = {total_reward:.2f}, Epsilon = {agent.epsilon:.3f}")
+            logger.extra_visibility(f"Step: {state}, Action: {action}, Reward: {reward}, Total Reward: {total_reward}")
+        logger.success(f"Episode {ep + 1}: Total Reward = {total_reward:.2f}, Epsilon = {agent.epsilon:.3f}")
 
         if ep % 10 == 0:
             agent.update_target_model()
@@ -83,7 +84,7 @@ def train():
             torch.save(agent.model.state_dict(), model_path)
             with open(os.path.join("models", f"meta_{timestamp}.json"), "w") as f:
                 json.dump({"epsilon": agent.epsilon}, f)
-            logger.info(f"Model and epsilon saved to {model_path}")
+            logger.success(f"Model and epsilon saved to {model_path}")
 
 if __name__ == "__main__":
     train()
