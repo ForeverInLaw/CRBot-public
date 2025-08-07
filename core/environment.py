@@ -154,6 +154,7 @@ class ClashRoyaleEnv:
         princess_tower_reward = 0
         if self.prev_enemy_princess_towers is not None:
             if current_enemy_princess_towers < self.prev_enemy_princess_towers:
+                self.logger.success("Enemy princess tower destroyed, applying reward.")
                 princess_tower_reward = 20
         self.prev_enemy_princess_towers = current_enemy_princess_towers
 
@@ -163,8 +164,8 @@ class ClashRoyaleEnv:
 
     @timing_decorator
     def _get_state(self):
-        self.actions.capture_area(CURRENT_SCREENSHOT)
-        elixir = self.actions.count_elixir()
+        screenshot = self.actions.capture_area(CURRENT_SCREENSHOT)
+        elixir = self.actions.count_elixir(screenshot)
         
         workspace_name = os.getenv('WORKSPACE_TROOP_DETECTION')
         if not workspace_name:

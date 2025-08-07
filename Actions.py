@@ -1,22 +1,20 @@
+from constants import get_card_screenshot_path, IMAGES_FOLDER, SCRIPT_DIR, SCREENSHOTS_FOLDER
 from ppadb.client import Client as AdbClient
+from PIL import Image
 import cv2
 import numpy as np
 import os
 import time
 import platform
-import threading
+import traceback
+from utils.decorator import timing_decorator
 from utils.logger import Logger
 from utils.screenshot import take_screenshot
-from utils.decorator import timing_decorator
-from constants import MAIN_IMAGES_DIR, BATTLE_START_BUTTON, WINNER_IMAGE, OK_BUTTON, MATCH_OVER_IMAGE, SCREENSHOTS_DIR, get_card_screenshot_path
 
 class Actions:
     def __init__(self):
         self.logger = Logger(name="Actions")
         self.os_type = platform.system()
-
-        # File lock for screenshot operations
-        self._screenshot_lock = threading.Lock()
 
         # Initialize ADB connection
         self.adb_client = AdbClient(host="127.0.0.1", port=5037)
@@ -70,12 +68,13 @@ class Actions:
             return None
         try:
             screen = take_screenshot(self.device.serial)
-            
-            # screen.save(os.path.join(SCREENSHOTS_DIR, 'current.png'))
-            
+
+            # screen.save(os.path.join(SCREENSHOTS_FOLDER, 'current.png'))
+
             return screen
         except Exception as e:
             self.logger.error(f"Failed to take screenshot: {e}")
+            
             return None
 
     def _click(self, x, y):
@@ -108,26 +107,33 @@ class Actions:
         """Capture screenshot of game area using ADB"""
         screenshot = self._take_screenshot()
         if screenshot:
-            # self.logger.extra_visibility(f"Captured screenshot, saving to {save_path}")
-            
-            # Use file lock to prevent concurrent access
-            with self._screenshot_lock:
-                try:
-                    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-                    screenshot.save(save_path)
-                    return screenshot
-                except (OSError, PermissionError) as e:
-                    screenshot.save(save_path)
-                    self.logger.error(f"Failed to save screenshot: {e}")
-                    return screenshot
+            try:
+                # Add a small delay and retry mechanism for file saving
+                for attempt in range(3):
+                    try:
+                        screenshot.save(save_path)
+                        break
+                    except (OSError, PermissionError) as e:
+                        if attempt < 2:
+                            self.logger.warning(f"Screenshot save attempt {attempt + 1} failed: {e}, retrying...")
+                            time.sleep(0.1)
+                        else:
+                            # Try with a timestamped filename as fallback
+                            timestamp = int(time.time() * 1000)
+                            fallback_path = save_path.replace('.png', f'_{timestamp}.png')
+                            self.logger.warning(f"Using fallback path: {fallback_path}")
+                            screenshot.save(fallback_path)
+            except Exception as e:
+                self.logger.error(f"Failed to save screenshot: {e}")
         else:
             self.logger.warning("Failed to capture screenshot")
-            return None
 
     def capture_card_area(self, save_path):
         """Capture screenshot of card area using ADB"""
         screenshot = self._take_screenshot()
         if screenshot:
+            # Ensure directory exists before saving
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
             # Crop to card bar area
             cropped = screenshot.crop((
                 self.CARD_BAR_X, 
@@ -164,16 +170,17 @@ class Actions:
             left = i * card_width
             card_img = card_bar.crop((left, 0, left + card_width, self.CARD_BAR_HEIGHT))
             save_path = get_card_screenshot_path(f"card_{i+1}.png")
+            # Ensure directory exists before saving
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
             card_img.save(save_path)
             cards.append(save_path)
         
         return cards
 
     @timing_decorator
-    def count_elixir(self, screenshot=None):
+    def count_elixir(self):
         """Count elixir using ADB screenshot analysis"""
-        if screenshot is None:
-            screenshot = self._take_screenshot()
+        screenshot = self._take_screenshot()
         if not screenshot:
             self.logger.warning("Failed to capture screenshot for elixir counting")
             return 0
@@ -219,21 +226,6 @@ class Actions:
             x, y, w, h = region
             screenshot_cv = screenshot_cv[y:y+h, x:x+w]
             offset_x, offset_y = x, y
-        else:
-            offset_x, offset_y = 0, 0
-            
-        # Load template
-        template = cv2.imread(template_path)
-        if template is None:
-            self.logger.error(f"Could not load template: {template_path}")
-            return None
-            
-        # Perform template matching
-        result = cv2.matchTemplate(screenshot_cv, template, cv2.TM_CCOEFF_NORMED)
-        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
-        
-        if max_val >= confidence:
-            # Return center coordinates with offset
             template_h, template_w = template.shape[:2]
             center_x = max_loc[0] + template_w // 2 + offset_x
             center_y = max_loc[1] + template_h // 2 + offset_y
@@ -266,7 +258,7 @@ class Actions:
 
     def click_battle_start(self):
         """Find and click the battle start button using ADB and template matching"""
-        button_image = BATTLE_START_BUTTON
+        button_image = os.path.join(IMAGES_FOLDER, "battlestartbutton.png")
         confidences = [0.8, 0.7, 0.6, 0.5]  # Try multiple confidence levels
 
         # Define the region for the battle button in device coordinates
@@ -290,7 +282,7 @@ class Actions:
     def detect_game_end(self):
         """Detect game end using ADB and template matching"""
         try:
-            winner_img = WINNER_IMAGE
+            winner_img = os.path.join(IMAGES_FOLDER, "Winner.png")
             confidences = [0.8, 0.7, 0.6]
 
             # Define winner detection region in device coordinates
@@ -318,7 +310,7 @@ class Actions:
 
     def click_ok_button(self):
         """Click the OK button to close popups"""
-        ok_button_image = OK_BUTTON
+        ok_button_image = os.path.join(IMAGES_FOLDER, "okbutton.png")
         confidences = [0.8, 0.6, 0.4]
 
         # Define the region for the OK button in device coordinates
@@ -336,7 +328,7 @@ class Actions:
     @timing_decorator
     def detect_match_over(self):
         """Detect match over using ADB and template matching"""
-        matchover_img = os.path.join(MAIN_IMAGES_DIR, "matchover.png")
+        matchover_img = os.path.join(IMAGES_FOLDER, "matchover.png")
         confidences = [0.8, 0.6, 0.4]
         
         # Define the region where the matchover image appears in device coordinates
