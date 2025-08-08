@@ -7,9 +7,16 @@ This script helps you set up ADB connection with BlueStacks for the CRBot projec
 
 import subprocess
 import os
+import sys
 import time
 import shutil
 from ppadb.client import Client as AdbClient
+
+# Ensure project root is on sys.path so `from core ...` works when running from utils/
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 
 def find_adb_executable():
     """Find adb.exe in common locations"""
@@ -104,14 +111,14 @@ def connect_bluestacks(adb_path="adb"):
     """Connect to BlueStacks via ADB"""
     print("\nConnecting to BlueStacks...")
     
-    # Common BlueStacks ADB ports
-    ports = [5555, 5557, 5559, 5561]
+    # Common BlueStacks ADB ports (include 5556 per user setup)
+    ports = [5555, 5556, 5557, 5559, 5561]
     
     for port in ports:
         try:
             result = subprocess.run([adb_path, 'connect', f'127.0.0.1:{port}'], 
                                   capture_output=True, text=True)
-            if 'connected' in result.stdout.lower():
+            if 'connected' in result.stdout.lower() or 'already connected' in result.stdout.lower():
                 print(f"✓ Connected to BlueStacks on port {port}")
                 return True
         except Exception as e:
@@ -163,7 +170,8 @@ def test_screenshot():
         if actions.device:
             screenshot = actions._take_screenshot()
             if screenshot:
-                test_path = "../assets/screenshots/test_screenshot.png"
+                test_path = os.path.join(PROJECT_ROOT, "assets", "screenshots", "test_screenshot.png")
+                os.makedirs(os.path.dirname(test_path), exist_ok=True)
                 screenshot.save(test_path)
                 print(f"✓ Screenshot saved to {test_path}")
                 return True

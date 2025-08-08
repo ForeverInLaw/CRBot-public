@@ -3,3 +3,9 @@
 
 # Python
 __pycache__
+
+# Local artifacts
+assets/model/*.pth
+assets/model/ckpt_*.pt
+assets/model/*.json
+assets/screenshots/*

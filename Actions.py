@@ -43,16 +43,64 @@ class Actions:
         self.CARD_BAR_HEIGHT = 250
 
     def _connect_device(self):
-        """Connect to the BlueStacks ADB device"""
+        """Connect to the BlueStacks ADB device.
+        - Prefer a specific device if ADB_SERIAL or BLUESTACKS_PORT is provided
+        - Filter out offline devices
+        - Log detected devices for troubleshooting
+        """
         try:
             devices = self.adb_client.devices()
             if not devices:
                 self.logger.error("No ADB devices found. Make sure BlueStacks is running and ADB is enabled.")
                 self.logger.error("Run setup_adb.py first to configure ADB connection.")
                 return False
-            
-            # Usually BlueStacks appears as the first device, but you might need to select the right one
-            self.device = devices[0]
+
+            def _safe_state(d):
+                try:
+                    return d.get_state()
+                except Exception:
+                    return "offline"
+
+            # Build list of (serial, state) for logging and filtering
+            device_info_list = []
+            for d in devices:
+                state = _safe_state(d)
+                device_info_list.append((d.serial, state))
+
+            # Log discovered devices
+            readable = ", ".join([f"{serial}({state})" for serial, state in device_info_list])
+            self.logger.info(f"Detected ADB devices: {readable}")
+
+            # Filter out offline devices
+            online_devices = [d for d in devices if _safe_state(d) == 'device']
+            if not online_devices:
+                self.logger.error("All detected ADB devices are offline. Restart BlueStacks or ADB and try again.")
+                return False
+
+            # Preference: explicit serial
+            preferred_serial = os.getenv("ADB_SERIAL")
+            if not preferred_serial:
+                # Preference via BlueStacks port
+                port = os.getenv("BLUESTACKS_PORT")
+                if port:
+                    preferred_serial = f"127.0.0.1:{port}"
+
+            # Choose device
+            selected = None
+            if preferred_serial:
+                for d in online_devices:
+                    if d.serial == preferred_serial:
+                        selected = d
+                        break
+                if not selected:
+                    self.logger.warning(f"Preferred device {preferred_serial} not found among online devices.")
+
+            if not selected:
+                # Heuristic: prefer local loopback BlueStacks devices
+                bluestacks_candidates = [d for d in online_devices if d.serial.startswith("127.0.0.1:")]
+                selected = bluestacks_candidates[0] if bluestacks_candidates else online_devices[0]
+
+            self.device = selected
             self.logger.success(f"Successfully connected to ADB device: {self.device.serial}")
             return True
         except Exception as e:
