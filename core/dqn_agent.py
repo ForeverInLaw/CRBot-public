@@ -7,6 +7,7 @@ from collections import deque
 import numpy as np
 from constants import MODEL_DIR
 from utils.decorator import timing_decorator
+from core.per_buffer import PrioritizedReplayBuffer
 
 class DQN(nn.Module):
     def __init__(self, input_dim, output_dim):
