@@ -8,6 +8,7 @@ import numpy as np
 from constants import MODEL_DIR
 from utils.decorator import timing_decorator
 from core.per_buffer import PrioritizedReplayBuffer
+from torch.cuda.amp import autocast, GradScaler
 
 class DQN(nn.Module):
     def __init__(self, input_dim, output_dim):
@@ -47,8 +48,13 @@ class DQNAgent:
         self.model = DQN(state_size, action_size).to(self.device)
         self.target_model = DQN(state_size, action_size).to(self.device)
         self.update_target_model()
-        self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
+        # Optimizer + Scheduler
+        self.optimizer = optim.AdamW(self.model.parameters(), lr=1e-3, weight_decay=1e-4)
+        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=100000, eta_min=1e-5)
         self.criterion = nn.SmoothL1Loss(reduction='none')
+        # AMP
+        self.use_amp = self.device.type == 'cuda'
+        self.scaler = GradScaler(enabled=self.use_amp)
         # Prioritized replay buffer
         self.memory = PrioritizedReplayBuffer(capacity=100000, alpha=0.6)
         self.per_beta = 0.4
@@ -63,9 +69,15 @@ class DQNAgent:
         # Step-based scheduling
         self.steps_done = 0
         self.target_update_every_steps = 1000
+        self.tau = 0.005  # Polyak coefficient for soft updates
 
     def update_target_model(self):
         self.target_model.load_state_dict(self.model.state_dict())
+
+    def soft_update(self):
+        with torch.no_grad():
+            for target_param, param in zip(self.target_model.parameters(), self.model.parameters()):
+                target_param.data.mul_(1.0 - self.tau).add_(self.tau * param.data)
 
     def after_step(self):
         self.steps_done += 1
@@ -73,6 +85,9 @@ class DQNAgent:
             self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
         if self.per_beta < 1.0:
             self.per_beta = min(1.0, self.per_beta + self.per_beta_increment)
+        # Soft update target every step
+        self.soft_update()
+        # Optionally keep periodic hard sync
         if self.steps_done % self.target_update_every_steps == 0:
             self.update_target_model()
 
@@ -80,38 +95,47 @@ class DQNAgent:
         self.memory.add((s, a, r, s2, done, next_action_mask))
 
     def act(self, state, action_mask=None):
+        # If exploring
         if random.random() < self.epsilon:
             if action_mask is not None:
                 valid_actions = np.where(action_mask)[0]
                 if len(valid_actions) > 0:
-                    return np.random.choice(valid_actions)
+                    return int(np.random.choice(valid_actions))
+                # Fallback to NO_OP when mask has no valids
+                return self.action_size - 1
             return random.randrange(self.action_size)
         
-        state_t = torch.tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
+        # Exploiting
+        state_t = torch.as_tensor(np.asarray(state, dtype=np.float32), device=self.device).unsqueeze(0)
         with torch.no_grad():
             q_values = self.model(state_t)
         
         if action_mask is not None:
             torch_mask = torch.as_tensor(action_mask, dtype=torch.bool, device=self.device)
+            if torch_mask.numel() != self.action_size:
+                # Guard against mask shape mismatch
+                return self.action_size - 1
             q_values[0][~torch_mask] = -1e9
-            
-        return q_values.argmax().item()
+            if not torch_mask.any():
+                return self.action_size - 1
+        
+        return int(q_values.argmax().item())
 
     @timing_decorator
     def replay(self, batch_size):
         if len(self.memory) < batch_size:
-            return
+            return None
         # Sample with priorities
         samples, indices, is_weights = self.memory.sample(batch_size, beta=self.per_beta)
         states, actions, rewards, next_states, dones, next_masks = zip(*samples)
 
-        # Tensors on device
-        states_t = torch.tensor(states, dtype=torch.float32, device=self.device)
-        actions_t = torch.tensor(actions, dtype=torch.long, device=self.device)
-        rewards_t = torch.tensor(rewards, dtype=torch.float32, device=self.device)
-        next_states_t = torch.tensor(next_states, dtype=torch.float32, device=self.device)
-        dones_t = torch.tensor(dones, dtype=torch.bool, device=self.device)
-        is_w_t = torch.tensor(is_weights, dtype=torch.float32, device=self.device)
+        # Tensors on device (fast path)
+        states_t = torch.as_tensor(np.asarray(states, dtype=np.float32), device=self.device)
+        actions_t = torch.as_tensor(np.asarray(actions, dtype=np.int64), device=self.device)
+        rewards_t = torch.as_tensor(np.asarray(rewards, dtype=np.float32), device=self.device)
+        next_states_t = torch.as_tensor(np.asarray(next_states, dtype=np.float32), device=self.device)
+        dones_t = torch.as_tensor(np.asarray(dones, dtype=np.bool_), device=self.device)
+        is_w_t = torch.as_tensor(np.asarray(is_weights, dtype=np.float32), device=self.device)
 
         # Build next action mask tensor (True = valid). If None, consider all valid
         if any(m is not None for m in next_masks):
@@ -136,22 +160,31 @@ class DQNAgent:
             target_t = rewards_t + self.gamma * next_q_t * (~dones_t).float()
 
         # Current Q(s,a)
-        q_current_all = self.model(states_t)  # [B, A]
-        q_sa = q_current_all.gather(1, actions_t.unsqueeze(1)).squeeze(1)  # [B]
+        with autocast(enabled=self.use_amp):
+            q_current_all = self.model(states_t)  # [B, A]
+            q_sa = q_current_all.gather(1, actions_t.unsqueeze(1)).squeeze(1)  # [B]
+            td_error = target_t.detach() - q_sa
+            loss_per_item = self.criterion(q_sa, target_t.detach())
+            loss = (is_w_t * loss_per_item).mean()
 
-        # TD error and weighted loss
-        td_error = target_t.detach() - q_sa
-        loss_per_item = self.criterion(q_sa, target_t.detach())
-        loss = (is_w_t * loss_per_item).mean()
-
-        self.optimizer.zero_grad()
-        loss.backward()
-        nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)
-        self.optimizer.step()
+        self.optimizer.zero_grad(set_to_none=True)
+        if self.use_amp:
+            self.scaler.scale(loss).backward()
+            self.scaler.unscale_(self.optimizer)
+            nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+        else:
+            loss.backward()
+            nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)
+            self.optimizer.step()
+        # Step LR scheduler after optimizer step
+        self.scheduler.step()
 
         # Update priorities with absolute TD error
         new_priorities = (td_error.abs().detach().cpu().numpy() + 1e-6)
         self.memory.update_priorities(indices, new_priorities)
+        return float(loss.item())
 
     def save(self, filename: str):
         path = filename
@@ -161,6 +194,7 @@ class DQNAgent:
         checkpoint = {
             "model_state_dict": self.model.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
+            "scheduler_state_dict": self.scheduler.state_dict(),
             "epsilon": self.epsilon,
             "steps_done": self.steps_done,
             "target_update_every_steps": self.target_update_every_steps,
@@ -175,11 +209,9 @@ class DQNAgent:
         path = filename
         if not os.path.isabs(filename):
             path = os.path.join(MODEL_DIR, filename)
-        # Load checkpoint
         checkpoint = torch.load(path, map_location="cpu")
         current_state = self.model.state_dict()
         if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
-            # New-style checkpoint
             model_sd = checkpoint.get("model_state_dict", {})
             filtered = {}
             skipped = []
@@ -189,14 +221,18 @@ class DQNAgent:
                 else:
                     skipped.append(k)
             self.model.load_state_dict(filtered, strict=False)
-            # Restore optimizer if shapes match partially (safe to load strict=False)
             opt_sd = checkpoint.get("optimizer_state_dict")
             if opt_sd is not None:
                 try:
                     self.optimizer.load_state_dict(opt_sd)
                 except Exception:
                     print("Warning: optimizer state not loaded due to mismatch.")
-            # Restore meta
+            sch_sd = checkpoint.get("scheduler_state_dict")
+            if sch_sd is not None:
+                try:
+                    self.scheduler.load_state_dict(sch_sd)
+                except Exception:
+                    print("Warning: scheduler state not loaded due to mismatch.")
             self.epsilon = checkpoint.get("epsilon", self.epsilon)
             self.steps_done = checkpoint.get("steps_done", self.steps_done)
             self.target_update_every_steps = checkpoint.get("target_update_every_steps", self.target_update_every_steps)
@@ -206,7 +242,6 @@ class DQNAgent:
             if skipped:
                 print(f"Skipped keys: {skipped[:5]}{'...' if len(skipped) > 5 else ''}")
         else:
-            # Legacy raw state_dict of model weights
             filtered = {}
             skipped = []
             for k, v in checkpoint.items():
@@ -220,3 +255,8 @@ class DQNAgent:
                 print(f"Skipped keys: {skipped[:5]}{'...' if len(skipped) > 5 else ''}")
         self.model.to(self.device).eval()
         self.update_target_model()
+
+    def get_lr(self) -> float:
+        for pg in self.optimizer.param_groups:
+            return float(pg.get('lr', 0.0))
+        return 0.0
